@@ -347,3 +347,47 @@ pub fn logspace(a: f64, b: f64, n: usize) -> Vec<f64> {
         .map(|i| 10f64.powf(a + (b - a) * i as f64 / (n - 1) as f64))
         .collect()
 }
+
+/// A local minimum of a signature curve: the half-wavelength and the lowest load factor there.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Minimum {
+    pub length: f64,
+    pub load_factor: f64,
+}
+
+/// The interior local minima of a signature curve's lowest load factor, shortest half-wavelength
+/// first. A minimum is refined by fitting a parabola in `log(length)` through it and its two
+/// neighbours, since the lengths are usually log-spaced. The curve's ends are not minima (the
+/// last point of a signature curve is still falling towards global buckling).
+///
+/// For the Direct Strength Method the first minimum is usually local buckling and the second
+/// distortional; which is which is the engineer's (or the caller's) call, and CUFSM leaves it so.
+pub fn signature_minima(curve: &[LengthResult]) -> Vec<Minimum> {
+    let pts: Vec<(f64, f64)> = curve
+        .iter()
+        .filter_map(|r| r.load_factors.first().map(|&lf| (r.length.ln(), lf)))
+        .collect();
+    let mut out = vec![];
+    for i in 1..pts.len().saturating_sub(1) {
+        let ((x0, y0), (x1, y1), (x2, y2)) = (pts[i - 1], pts[i], pts[i + 1]);
+        if !(y1 < y0 && y1 <= y2) {
+            continue;
+        }
+        // Vertex of the parabola through the three points.
+        let d0 = (y1 - y0) / (x1 - x0);
+        let d1 = (y2 - y1) / (x2 - x1);
+        let a = (d1 - d0) / (x2 - x0);
+        let (x, y) = if a > 0.0 {
+            let b = d0 - a * (x0 + x1);
+            let xv = (-b / (2.0 * a)).clamp(x0, x2);
+            (xv, y1 + (xv - x1) * (d0 + a * (xv - x0)))
+        } else {
+            (x1, y1)
+        };
+        out.push(Minimum {
+            length: x.exp(),
+            load_factor: y.min(y1),
+        });
+    }
+    out
+}

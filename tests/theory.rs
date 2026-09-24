@@ -319,3 +319,54 @@ fn refining_the_mesh_converges_from_above() {
         "{lfs:?}"
     );
 }
+
+/// A lipped channel's signature curve has a local minimum and then a distortional one, and each
+/// refined minimum sits at or below the sampled points either side of it.
+#[test]
+fn signature_minima_of_a_lipped_channel() {
+    use cufsm::template::{templatecalc, Shape, Template};
+    use cufsm::{signature_minima, signature_ss};
+    let m = templatecalc(
+        &Template::outside(Shape::C, 200.0, 76.0, 15.0, 1.9, 3.0, 12),
+        Material::isotropic(E, NU),
+    );
+    let m = loaded(
+        m,
+        Actions {
+            p: 1.0,
+            ..Default::default()
+        },
+    );
+    let curve = signature_ss(&m, 1).unwrap();
+    let mins = signature_minima(&curve);
+    assert!(mins.len() >= 2, "{mins:?}");
+    let (local, dist) = (mins[0], mins[1]);
+    // Local buckling at a half-wavelength of the order of the web depth; distortional several
+    // times longer and higher.
+    assert!(local.length > 50.0 && local.length < 250.0, "{local:?}");
+    assert!(
+        dist.length > 2.0 * local.length && dist.load_factor > local.load_factor,
+        "{dist:?}"
+    );
+    for mn in &mins {
+        let at = curve
+            .iter()
+            .min_by(|a, b| {
+                (a.length / mn.length)
+                    .ln()
+                    .abs()
+                    .total_cmp(&(b.length / mn.length).ln().abs())
+            })
+            .unwrap();
+        assert!(
+            mn.load_factor <= at.load_factors[0] * (1.0 + 1e-12),
+            "{mn:?} above the sample at {}",
+            at.length
+        );
+        assert!(
+            mn.load_factor > 0.95 * at.load_factors[0],
+            "{mn:?} far below the sample at {}",
+            at.length
+        );
+    }
+}

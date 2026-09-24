@@ -145,6 +145,7 @@ for c = 1:numel(cases)
   r = struct();
   r.load_factors_dense = lf_dense;
   r.name = cs.name;
+  if isfield(cs, 'template'), r.template = cs.template; end
   r.E = E;
   r.nu = nu;
   r.actions = ac;

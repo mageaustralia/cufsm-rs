@@ -38,10 +38,12 @@ pub mod dense;
 pub mod model;
 pub mod section;
 pub mod strip;
+pub mod template;
 
-pub use analysis::{signature_ss, stripmain, LengthResult};
+pub use analysis::{signature_minima, signature_ss, stripmain, LengthResult, Minimum};
 pub use model::{BoundaryCondition, Constraint, Dof, Element, Material, Model, Node};
 pub use section::{grosprop, stresgen, Actions, GrossProperties};
+pub use template::{templatecalc, Shape, Template};
 
 /// Why an analysis could not run.
 #[derive(Clone, Debug, PartialEq)]

@@ -105,4 +105,16 @@ cases.append(general("lipped-c C-C major bending", small, actions(Mxx=1e6), "C-C
 cases.append(signature("lipped-c constrained compression", small, actions(P=1000.0),
                        n_lengths=20, constraints=[[1, 2, 1.0, 11, 2]], fix=[[6, 7]]))
 
+# Outside dimensions and inside radii, converted by CUFSM's template_out_to_in.m: a 200 x 76 x 15
+# x 1.9 lipped C and a Z, with 3 mm inside radii, and a sharp-cornered plain channel.
+out_c = template(1, 200, 76, 76, 15, 15, 3.0, 1.9, nh=8, nb=4, nd=2, nr=2)
+out_c["center"] = 0
+out_z = template(2, 200, 76, 70, 15, 15, 3.0, 1.9, nh=8, nb=4, nd=2, nr=2)
+out_z["center"] = 0
+out_p = template(1, 150, 50, 50, 0, 0, 0, 2.0)
+out_p["center"] = 0
+cases.append(signature("outside-dims lipped-c compression", {"template": out_c}, actions(P=1000.0), n_lengths=20))
+cases.append(signature("outside-dims lipped-z compression", {"template": out_z}, actions(P=1000.0), n_lengths=20))
+cases.append(signature("outside-dims plain channel compression", {"template": out_p}, actions(P=1000.0), n_lengths=20))
+
 print(json.dumps(cases, indent=1))
