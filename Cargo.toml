@@ -11,7 +11,7 @@ homepage = "https://mageengineering.com.au/"
 repository = "https://github.com/mageaustralia/cufsm-rs"
 keywords = ["finite-strip", "buckling", "cold-formed", "cufsm", "structural"]
 categories = ["mathematics", "science"]
-exclude = ["tests/fixtures", "oracle"]
+exclude = ["tests", "oracle", "examples/dump_matrices.rs"]
 
 [lib]
 name = "cufsm"
