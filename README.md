@@ -113,15 +113,16 @@ and no more.
 
 ## Cost
 
-Every eigenpair is found at every length, so the cost grows as the cube of the DOF count. On one
+Every eigenvalue is found at every length (the modes only for the load factors asked for), so
+the cost grows as the cube of the DOF count. On one
 core of an Apple M-series laptop (`cargo run --release --example timing`), a 200 x 76 x 15 x 1.9
 lipped channel's signature curve (100 half-wavelengths, 10 modes each) takes:
 
 | Mesh | DOF | Signature curve | cFSM classification, per length |
 |---|---|---|---|
-| 29 nodes | 116 | 0.6 s | 6 ms |
-| 45 nodes | 180 | 2.3 s | 18 ms |
-| 77 nodes | 308 | 10 s | 100 ms |
+| 29 nodes | 116 | 0.34 s | 3.5 ms |
+| 45 nodes | 180 | 1.3 s | 10 ms |
+| 77 nodes | 308 | 6.7 s | 50 ms |
 
 ## Regenerating the references
 

@@ -18,7 +18,7 @@
 //! allow that much and no more (see `tests/cufsm_parity.rs`); local and distortional modes,
 //! which are well conditioned, agree with CUFSM to 1e-12.
 
-use crate::dense::{backward_t, cholesky, forward, sym_eigen, Mat};
+use crate::dense::{backward_t, cholesky, forward, sym_eigen_top, Mat};
 use crate::model::{BoundaryCondition, Dof, Model};
 use crate::strip::{kglocal, klocal, spring_klocal, trans};
 use crate::Error;
@@ -287,44 +287,37 @@ pub fn buckling_eigen(k: &Mat, kg: &Mat, neigs: usize) -> Result<(Vec<f64>, Vec<
             l
         }
     };
-    // C = L⁻¹ Kg L⁻ᵀ: X = L⁻¹ Kg column by column, then C = L⁻¹ Xᵀ (Kg is symmetric).
-    let mut x = Mat::zeros(n);
+    // C = L⁻¹ Kg L⁻ᵀ: Xᵀ = (L⁻¹ Kg)ᵀ built a row at a time (Kg is symmetric, so its column j is
+    // its row j), then row j of C = L⁻¹ times row j of Xᵀ (C is symmetric too). Every pass runs
+    // along contiguous rows.
+    let mut xt = Mat::zeros(n);
+    for j in 0..n {
+        let row = &mut xt.data[j * n..(j + 1) * n];
+        row.copy_from_slice(&kg.data[j * n..(j + 1) * n]);
+        forward(&l, row);
+    }
+    let mut c = Mat::zeros(n);
     let mut col = vec![0.0; n];
     for j in 0..n {
         for i in 0..n {
-            col[i] = kg.get(i, j);
+            col[i] = xt.data[i * n + j];
         }
         forward(&l, &mut col);
-        for i in 0..n {
-            x.set(i, j, col[i]);
-        }
+        c.data[j * n..(j + 1) * n].copy_from_slice(&col);
     }
-    let mut c = Mat::zeros(n);
-    for j in 0..n {
-        for i in 0..n {
-            col[i] = x.get(j, i);
-        }
-        forward(&l, &mut col);
-        for i in 0..n {
-            c.set(i, j, col[i]);
-        }
-    }
-    let (mu, y) = sym_eigen(&c);
-    // λ = 1/μ; the positive λ are the positive μ, the smallest λ the largest μ. A μ at round-off
+    // Only the largest `neigs` μ are wanted (λ = 1/μ, the positive λ the positive μ, the smallest
+    // λ the largest μ); every eigenvalue comes back too, for the threshold. A μ at round-off
     // relative to the largest is not a buckling mode but the numerical null of Kg.
-    let mu_max = mu.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
-    let mut picked: Vec<usize> = (0..n).filter(|&i| mu[i] > mu_max * 1e-14).collect();
-    picked.sort_by(|&a, &b| {
-        mu[b]
-            .partial_cmp(&mu[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    picked.truncate(neigs);
-    let mut lfs = Vec::with_capacity(picked.len());
-    let mut modes = Vec::with_capacity(picked.len());
-    for i in picked {
-        lfs.push(1.0 / mu[i]);
-        let mut phi: Vec<f64> = (0..n).map(|r| y.get(r, i)).collect();
+    let (all, top, vecs) = sym_eigen_top(&c, neigs);
+    let mu_max = all.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+    let mut lfs = Vec::with_capacity(top.len());
+    let mut modes = Vec::with_capacity(top.len());
+    for (mu, y) in top.iter().zip(vecs) {
+        if *mu <= mu_max * 1e-14 {
+            break;
+        }
+        lfs.push(1.0 / mu);
+        let mut phi = y;
         backward_t(&l, &mut phi);
         if let Some(d) = &scale {
             for (v, di) in phi.iter_mut().zip(d) {
