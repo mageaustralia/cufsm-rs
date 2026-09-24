@@ -108,7 +108,10 @@ pub fn sym_eigen(a: &Mat) -> (Vec<f64>, Mat) {
     let mut d = vec![0.0; n];
     let mut e = vec![0.0; n];
     tred2(n, &mut v, &mut d, &mut e);
-    tql2(n, &mut v, &mut d, &mut e);
+    // tql2 rotates pairs of columns of V; held transposed, each pair is two contiguous rows.
+    let mut vt = transpose(n, &v);
+    tql2(n, &mut vt, &mut d, &mut e);
+    let v = transpose(n, &vt);
     // Sort ascending, carrying the vectors.
     let mut order: Vec<usize> = (0..n).collect();
     order.sort_by(|&i, &j| d[i].partial_cmp(&d[j]).unwrap_or(std::cmp::Ordering::Equal));
@@ -120,6 +123,16 @@ pub fn sym_eigen(a: &Mat) -> (Vec<f64>, Mat) {
         }
     }
     (vals, vecs)
+}
+
+fn transpose(n: usize, a: &[f64]) -> Vec<f64> {
+    let mut t = vec![0.0; n * n];
+    for i in 0..n {
+        for j in 0..n {
+            t[j * n + i] = a[i * n + j];
+        }
+    }
+    t
 }
 
 /// Householder reduction to tridiagonal form, accumulating the transformation in `v`.
@@ -218,9 +231,8 @@ fn tred2(n: usize, v: &mut [f64], d: &mut [f64], e: &mut [f64]) {
     e[0] = 0.0;
 }
 
-/// Implicit QL on the tridiagonal form, accumulating the eigenvectors in `v`.
-fn tql2(n: usize, v: &mut [f64], d: &mut [f64], e: &mut [f64]) {
-    let at = |i: usize, j: usize| i * n + j;
+/// Implicit QL on the tridiagonal form, accumulating the eigenvectors in `vt` (held transposed).
+fn tql2(n: usize, vt: &mut [f64], d: &mut [f64], e: &mut [f64]) {
     for i in 1..n {
         e[i - 1] = e[i];
     }
@@ -274,10 +286,13 @@ fn tql2(n: usize, v: &mut [f64], d: &mut [f64], e: &mut [f64]) {
                     c = p / r;
                     p = c * d[i] - s * g;
                     d[i + 1] = h + s * (c * g + s * d[i]);
+                    // `vt` is Vᵀ: row i of vt is column i of V.
+                    let (lo, hi) = vt.split_at_mut((i + 1) * n);
+                    let (ri, ri1) = (&mut lo[i * n..(i + 1) * n], &mut hi[..n]);
                     for k in 0..n {
-                        h = v[at(k, i + 1)];
-                        v[at(k, i + 1)] = s * v[at(k, i)] + c * h;
-                        v[at(k, i)] = c * v[at(k, i)] - s * h;
+                        h = ri1[k];
+                        ri1[k] = s * ri[k] + c * h;
+                        ri[k] = c * ri[k] - s * h;
                     }
                 }
                 p = -s * s2 * c3 * el1 * e[l] / dl1;
