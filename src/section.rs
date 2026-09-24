@@ -145,6 +145,61 @@ pub fn stresgen(model: &mut Model, actions: &Actions, props: &GrossProperties, u
     }
 }
 
+/// The actions that first yield the section, CUFSM `yieldMP.m` (the `helpers/` copy, which
+/// zeroes a result that comes out NaN): the squash load `Py = fy A` and, for each moment, the
+/// moment at which the most-stressed node reaches `fy`. The Direct Strength Method divides the
+/// elastic buckling loads by these.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct YieldActions {
+    pub py: f64,
+    pub mxx: f64,
+    pub mzz: f64,
+    pub m11: f64,
+    pub m22: f64,
+}
+
+pub fn yield_mp(
+    model: &Model,
+    fy: f64,
+    props: &GrossProperties,
+    unsymmetric: bool,
+) -> YieldActions {
+    let GrossProperties {
+        a,
+        xcg,
+        zcg,
+        ixx,
+        izz,
+        thetap,
+        i11,
+        i22,
+        ..
+    } = *props;
+    let ixz = if unsymmetric { props.ixz } else { 0.0 };
+    let peak = |f: &dyn Fn(f64, f64) -> f64| {
+        model
+            .nodes
+            .iter()
+            .map(|n| f(n.x - xcg, n.z - zcg).abs())
+            .fold(f64::NEG_INFINITY, f64::max)
+    };
+    let guard = |v: f64| if v.is_nan() { 0.0 } else { v };
+    let bend = |mxx: f64, mzz: f64| {
+        move |dx: f64, dz: f64| {
+            ((mzz * ixx + mxx * ixz) * dx - (mzz * ixz + mxx * izz) * dz) / (izz * ixx - ixz * ixz)
+        }
+    };
+    let th = thetap * PI / 180.0;
+    let (c, s) = (th.cos(), th.sin());
+    YieldActions {
+        py: fy * a,
+        mxx: guard(fy / peak(&bend(1.0, 0.0))),
+        mzz: guard(fy / peak(&bend(0.0, 1.0))),
+        m11: guard(fy / peak(&|dx, dz| (-s * dx + c * dz) / i11)),
+        m22: guard(fy / peak(&|dx, dz| (c * dx + s * dz) / i22)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

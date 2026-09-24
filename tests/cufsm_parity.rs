@@ -23,7 +23,7 @@ mod common;
 use common::*;
 use cufsm::analysis::{assemble_strips, elemprop, msort, stripmain};
 use cufsm::strip::{kglocal, klocal, trans};
-use cufsm::{grosprop, stresgen, Actions};
+use cufsm::{grosprop, stresgen, yield_mp, Actions};
 
 const MATRIX_TOL: f64 = 1e-12;
 const STRESS_TOL: f64 = 1e-12;
@@ -79,6 +79,43 @@ fn section_properties_and_stresses_match_cufsm() {
                 "{name}: node {} stress {} vs CUFSM {w}",
                 i + 1,
                 n.stress
+            );
+        }
+    }
+}
+
+#[test]
+fn first_yield_actions_match_cufsm() {
+    for r in cases() {
+        let name = r["name"].as_str().unwrap();
+        let m = model_of(&r);
+        let y = &r["yield"];
+        let got = yield_mp(
+            &m,
+            y["fy"].as_f64().unwrap(),
+            &grosprop(&m),
+            r["actions"]["unsymm"].as_f64().unwrap() != 0.0,
+        );
+        for (k, g) in [
+            ("Py", got.py),
+            ("Mxx", got.mxx),
+            ("Mzz", got.mzz),
+            ("M11", got.m11),
+            ("M22", got.m22),
+        ] {
+            // A moment no node resists (a flat plate about its own axis) never yields: CUFSM
+            // gives Inf (written as null) or a rounding-level stress's 1e18-odd. So must this.
+            let w = y[k].as_f64().unwrap_or(f64::INFINITY);
+            if w.abs() > 1e15 {
+                assert!(
+                    g.abs() > 1e15,
+                    "{name}: {k} {g}, CUFSM has it never yielding ({w})"
+                );
+                continue;
+            }
+            assert!(
+                (g - w).abs() <= 1e-12 * w.abs().max(1.0),
+                "{name}: {k} {g} vs CUFSM {w}"
             );
         }
     }

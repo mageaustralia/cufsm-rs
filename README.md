@@ -18,7 +18,8 @@ with general boundary conditions using CUFSM: conventional and constrained finit
   (S-S, C-C, S-C, C-F, C-G) and any set of longitudinal terms.
 - Fixed nodal DOFs, master-slave constraints, and springs (foundation or discrete, to ground or
   between nodes, CUFSM's v4.3 form).
-- Gross section properties and reference stresses from P, Mxx, Mzz, M11, M22.
+- Gross section properties, reference stresses from P, Mxx, Mzz, M11, M22, and the first-yield
+  actions (Py, My) the Direct Strength Method divides by.
 - The signature curve, and its local minima (the inputs to the Direct Strength Method).
 - CUFSM's C and Z template, lipped or plain, sharp or with rounded corners, from centreline
   dimensions or from outside dimensions and inside radii.

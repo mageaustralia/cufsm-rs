@@ -45,7 +45,7 @@ pub mod template;
 
 pub use analysis::{signature_minima, signature_ss, stripmain, LengthResult, Minimum};
 pub use model::{BoundaryCondition, Constraint, Dof, Element, Material, Model, Node, Spring};
-pub use section::{grosprop, stresgen, Actions, GrossProperties};
+pub use section::{grosprop, stresgen, yield_mp, Actions, GrossProperties, YieldActions};
 pub use template::{templatecalc, Shape, Template};
 
 /// Why an analysis could not run.
