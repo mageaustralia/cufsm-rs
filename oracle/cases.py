@@ -129,4 +129,33 @@ cases.append(signature("lipped-c grounded springs", small, actions(P=1000.0), n_
 cases.append(signature("lipped-c node springs", small, actions(P=1000.0), n_lengths=20, springs=springs_b))
 cases.append(general("lipped-c C-C springs", small, actions(P=1000.0), "C-C", [600.0, 2500.0], 6, springs=springs_a + springs_b[:1]))
 
+# cFSM: compression on sections the modal decomposition covers - a sharp lipped C, a rounded one
+# (many small corners), a lipped Z, a plain channel, a hat, and a branched I-section (a node with
+# three strips, which exercises the warping constraints at a branch).
+def i_section(h, bf, tw, tf, nw, nf):
+    node = [[1 + k, 0.0, h * k / nw, 1, 1, 1, 1, 0] for k in range(nw + 1)]
+    elem = [[k + 1, k + 1, k + 2, tw, 100] for k in range(nw)]
+    for root, z in [(nw + 1, h), (1, 0.0)]:
+        for side in (-1.0, 1.0):
+            prev = root
+            for k in range(1, nf + 1):
+                node.append([len(node) + 1, side * bf / 2 * k / nf, z, 1, 1, 1, 1, 0])
+                elem.append([len(elem) + 1, prev, len(node), tf, 100])
+                prev = len(node)
+    return {"node": node, "elem": elem}
+
+cfsm_lengths = [60.0, 250.0, 900.0, 3000.0]
+def cf(name, geom):
+    c = signature(name, geom, actions(P=1000.0), n_lengths=2, neigs=5)
+    c["lengths"] = cfsm_lengths
+    c["m_all"] = [[1]] * len(cfsm_lengths)
+    c["cfsm"] = True
+    return c
+cases.append(cf("cfsm lipped-c", lc))
+cases.append(cf("cfsm lipped-c rounded", lc_r))
+cases.append(cf("cfsm lipped-z", lz))
+cases.append(cf("cfsm plain channel", {"template": template(1, 150, 50, 50, 0, 0, 0, 2.0)}))
+cases.append(cf("cfsm hat", {"node": hat_node, "elem": hat_elem}))
+cases.append(cf("cfsm i-section", i_section(200.0, 100.0, 5.0, 8.0, 4, 2)))
+
 print(json.dumps(cases, indent=1))

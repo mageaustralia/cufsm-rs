@@ -34,7 +34,10 @@
 
 pub mod analysis;
 pub mod bc;
+pub mod cfsm;
+pub mod cutwp;
 pub mod dense;
+pub mod linalg;
 pub mod model;
 pub mod section;
 pub mod strip;

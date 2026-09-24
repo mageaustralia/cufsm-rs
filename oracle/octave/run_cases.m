@@ -166,7 +166,83 @@ for c = 1:numel(cases)
     lf_dense{l} = ev(1:min(neigs, numel(ev)))';
   end
 
+  % Stage 4 (cases flagged cfsm): CUFSM's cFSM. The natural basis at the first length and its
+  % space sizes; load factors restricted to G, D and L alone at every length (CUFSM's base vectors
+  % and mode_select, solved with eig()); and the default classification (ospace 1, couple 1,
+  % orth 2, norm 1) of the unconstrained modes of the dense solve.
+  cf = struct();
+  if isfield(cs, 'cfsm') && cs.cfsm
+    [cutA, cutxc, cutzc, cutIx, cutIz, cutIxz, cuttheta, cutI1, cutI2, cutJ, cutxs, cutzs, cutCw, cutB1, cutB2, cutwn] = cutwp_prop2(node(:, 2:3), elem(:, 2:4));
+    cf.cutwp = struct('A', cutA, 'xc', cutxc, 'zc', cutzc, 'Ix', cutIx, 'Iz', cutIz, 'Ixz', cutIxz, 'theta', cuttheta, 'I1', cutI1, 'I2', cutI2, 'J', cutJ, 'xs', cutxs, 'zs', cutzs, 'Cw', cutCw, 'B1', cutB1, 'B2', cutB2, 'wn', cutwn(:)');
+    ma1 = msort({m_all{1}}){1};
+    [bvl, ngm, ndm, nlm] = base_column(node, elem, prop, lengths(1), BC, ma1);
+    cf.ngm = ngm; cf.ndm = ndm; cf.nlm = nlm;
+    cf.b_v_l = full(bvl);
+    spaces = {'G', [1 0 0 0]; 'D', [0 1 0 0]; 'L', [0 0 1 0]};
+    for sp = 1:size(spaces, 1)
+      lfs = cell(numel(lengths), 1);
+      for l = 1:numel(lengths)
+        al = lengths(l); ma = msort({m_all{l}}){1};
+        [bv, ng, nd, nl] = base_column(node, elem, prop, al, BC, ma);
+        fl = spaces{sp, 2};
+        % CUFSM's mode_select fails on an empty space (b_v_red_m never assigned): a plain channel
+        % has no distortional modes. Recorded as no load factors.
+        if [ng nd nl] * fl(1:3)' == 0, lfs{l} = []; continue; end
+        R = mode_select(bv, ng, nd, nl, ones(1, ng) * fl(1), ones(1, nd) * fl(2), ones(1, nl) * fl(3), ones(1, 4 * nn - ng - nd - nl) * fl(4), 4 * nn, ma);
+        KL = sparse(zeros(4 * nn * numel(ma))); KgL = KL;
+        for i = 1:size(elem, 1)
+          ti = elem(i, 4); bi = elprop(i, 2);
+          k_l = klocal(E, E, nu, nu, E / (2 * (1 + nu)), ti, al, bi, BC, ma);
+          kg_l = kglocal(al, bi, node(elem(i, 2), 8) * ti, node(elem(i, 3), 8) * ti, BC, ma);
+          [k, kg] = trans(elprop(i, 3), k_l, kg_l, ma);
+          [KL, KgL] = assemble(KL, KgL, k, kg, elem(i, 2), elem(i, 3), nn, ma);
+        end
+        ev = eig(full(R' * KL * R), full((R' * KgL * R + (R' * KgL * R)') / 2));
+        ev = real(ev(abs(imag(ev)) < 1e-5 * abs(real(ev)) & real(ev) > 0));
+        ev = sort(ev);
+        lfs{l} = ev(1:min(neigs, numel(ev)))';
+      end
+      cf.(['lf_' spaces{sp, 1}]) = lfs;
+    end
+    % Classification of the unconstrained modes (dense solve), CUFSM's defaults.
+    G2.ospace = 1; G2.couple = 1; G2.orth = 2; G2.norm = 1;
+    clas = cell(numel(lengths), 1);
+    clas_nat = cell(numel(lengths), 1);
+    for l = 1:numel(lengths)
+      al = lengths(l); ma = msort({m_all{l}}){1};
+      KL = sparse(zeros(4 * nn * numel(ma))); KgL = KL;
+      for i = 1:size(elem, 1)
+        ti = elem(i, 4); bi = elprop(i, 2);
+        k_l = klocal(E, E, nu, nu, E / (2 * (1 + nu)), ti, al, bi, BC, ma);
+        kg_l = kglocal(al, bi, node(elem(i, 2), 8) * ti, node(elem(i, 3), 8) * ti, BC, ma);
+        [k, kg] = trans(elprop(i, 3), k_l, kg_l, ma);
+        [KL, KgL] = assemble(KL, KgL, k, kg, elem(i, 2), elem(i, 3), nn, ma);
+      end
+      [V, D] = eig(full(KL), full((KgL + KgL') / 2));
+      ev = diag(D); ok = find(abs(imag(ev)) < 1e-5 * abs(real(ev)) & real(ev) > 0);
+      [~, ord] = sort(real(ev(ok))); ok = ok(ord); ok = ok(1:min(3, numel(ok)));
+      [bv, ng, nd, nl] = base_column(node, elem, prop, al, BC, ma);
+      bvu = base_update(G2.ospace, G2.norm, bv, al, ma, node, elem, prop, ng, nd, nl, BC, G2.couple, G2.orth);
+      clq = zeros(numel(ok), 4);
+      for q = 1:numel(ok)
+        clq(q, :) = mode_class(bvu, real(V(:, ok(q))), ng, nd, nl, ma, 4 * nn, G2.couple);
+      end
+      clas{l} = clq;
+      % The same with the natural basis (orth 1): no eig() in base_update, so the basis is unique
+      % wherever the distortional space is (ndm <= 1, or none).
+      bvn = base_update(1, 1, bv, al, ma, node, elem, prop, ng, nd, nl, BC, 1, 1);
+      cln = zeros(numel(ok), 4);
+      for q = 1:numel(ok)
+        cln(q, :) = mode_class(bvn, real(V(:, ok(q))), ng, nd, nl, ma, 4 * nn, 1);
+      end
+      clas_nat{l} = cln;
+    end
+    cf.classification = clas;
+    cf.classification_natural = clas_nat;
+  end
+
   r = struct();
+  r.cfsm = cf;
   r.load_factors_dense = lf_dense;
   r.name = cs.name;
   if isfield(cs, 'template'), r.template = cs.template; end

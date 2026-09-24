@@ -22,9 +22,14 @@ with general boundary conditions using CUFSM: conventional and constrained finit
 - The signature curve, and its local minima (the inputs to the Direct Strength Method).
 - CUFSM's C and Z template, lipped or plain, sharp or with rounded corners, from centreline
   dimensions or from outside dimensions and inside radii.
+- cFSM, the constrained finite strip method: the global, distortional, local and other modal
+  spaces, analysis restricted to any of them (pure distortional buckling, for one), and the
+  G/D/L/O classification of any mode, for open sections (single- or multi-branched) with the
+  uncoupled basis, CUFSM's default. `cutwp_prop2` comes with it: shear centre, torsion and
+  warping constants, and the warping function.
 
-Not yet ported: cFSM (the constrained finite strip modal decomposition that labels
-modes as local, distortional or global).
+Not yet ported: cFSM's coupled basis (`couple = 2`) and its null-space choices for the other
+modes (`ospace` 2 to 4), and cFSM on sections with fixities, constraints or springs.
 
 ```rust
 use cufsm::{grosprop, stresgen, signature_ss, signature_minima, Actions, Material};
@@ -52,6 +57,7 @@ The point of a port is that it gives CUFSM's answers. Every claim below is a tes
 | **pyCUFSM**, an independent Python port | 5,900+ load factors on every fixture case it can run. | Within its own noise (below). |
 | **Theory**, no oracle (`tests/theory.rs`) | A simply supported plate at k = 4 with its minimum at a square half-wave; an outstand at k = 0.425 + (b/a)²; a long I-section at the Euler load, converging with the mesh; every eigenpair satisfying K φ = λ Kg φ to round-off; invariance to E, stress scale, mirroring, renumbering and translation; convergence from above under mesh refinement; springs that only stiffen, and a stiff one that approaches a fixed DOF. | All hold. |
 | **CUFSM's template** | Every node of 14 template cases. | To 1e-12. |
+| **CUFSM's cFSM** (`analysis/cFSM/`, under Octave) | Six sections: sharp and rounded lipped C, lipped Z, plain channel, hat, branched I-section. `cutwp_prop2`'s properties and warping function; the sizes of the four spaces and the spaces themselves; load factors restricted to G, D or L alone; the classification of every distinct mode, with CUFSM's defaults and with the natural basis. | Properties to 1e-10, spaces to 1e-8, restricted load factors to rounding, classifications to 1e-6 percentage points. |
 
 ### Accuracy, honestly
 
@@ -79,6 +85,16 @@ and no more.
 - Octave's `eigs` cannot handle an indefinite `Kg` the way MATLAB's does. On bending cases it
   returns eigenvalues wrong by orders of magnitude, and different on every run. The oracle
   therefore also solves CUFSM's own reduced matrices with `eig()`.
+- CUFSM also ships two `cutwp_prop2.m`: the `helpers/` one (first on the path) runs a
+  multi-branched section through the open-section walk where the `analysis/` one does not.
+  `helpers/`'s is ported. Its principal angle comes from `angle(Ix - Iy - 2 Ixy i)`, whose
+  imaginary part MATLAB forms as `+0` when `Ixy` is zero, which decides between +π/2 and -π/2 for a
+  section like a hat. The port matches.
+- CUFSM's `mode_select` fails on an empty space (selecting the distortional modes of a plain
+  channel, which has none). Here that is simply no load factors.
+- On a doubly symmetric section, cFSM's axial orthogonalisation meets repeated eigenvalues, so
+  its modal basis, and the vector-normalised classification with it, is not unique in CUFSM
+  either. The natural basis is, and that is what such a section is compared on.
 - pyCUFSM (as released on PyPI) mishandles fixed DOFs and constraints. Its `constr_user` drops a
   column and leaves stale identity columns, so fixed DOFs at the high end of the numbering come
   back free: a plate simply supported on both long edges buckles as an outstand. It also cannot

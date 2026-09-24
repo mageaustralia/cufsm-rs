@@ -425,3 +425,80 @@ fn springs_stiffen_and_a_stiff_one_approaches_a_fixed_dof() {
         );
     }
 }
+
+/// cFSM on a lipped channel in compression: the mode at the local minimum is mostly local and
+/// the one at the distortional minimum mostly distortional, and restricting the analysis to one
+/// space never buckles below the unrestricted section (a restricted problem is a subspace of it).
+/// It can buckle well above: here pure distortion is some 23% above the distortional minimum, whose
+/// mode borrows local deformation - the known behaviour of cFSM, and CUFSM's own figure (see
+/// `tests/cfsm_parity.rs`).
+#[test]
+fn cfsm_identifies_the_local_and_distortional_minima() {
+    use cufsm::cfsm::{classify, stripmain_constrained, Norm, Orth, Spaces};
+    use cufsm::template::{templatecalc, Shape, Template};
+    use cufsm::{signature_minima, signature_ss};
+    let m = templatecalc(
+        &Template::outside(Shape::C, 200.0, 76.0, 15.0, 1.9, 0.0, 12),
+        Material::isotropic(E, NU),
+    );
+    let m = loaded(
+        m,
+        Actions {
+            p: 1.0,
+            ..Default::default()
+        },
+    );
+    let curve = signature_ss(&m, 1).unwrap();
+    let mins = signature_minima(&curve);
+    let (local, dist) = (mins[0], mins[1]);
+    let at = |len: f64| stripmain(&m, &[len], &[vec![1.0]], BoundaryCondition::SS, 1).unwrap();
+    let cl = |len: f64| {
+        classify(
+            &m,
+            &at(len),
+            BoundaryCondition::SS,
+            Orth::Axial,
+            Norm::Vector,
+        )
+        .unwrap()[0][0]
+    };
+    let (cl_local, cl_dist) = (cl(local.length), cl(dist.length));
+    assert!(cl_local[2] > 80.0, "local minimum classified {cl_local:?}");
+    assert!(
+        cl_dist[1] > 60.0,
+        "distortional minimum classified {cl_dist:?}"
+    );
+    for (len, spaces) in [
+        (
+            local.length,
+            Spaces {
+                local: true,
+                ..Default::default()
+            },
+        ),
+        (
+            dist.length,
+            Spaces {
+                distortional: true,
+                ..Default::default()
+            },
+        ),
+        (
+            5000.0,
+            Spaces {
+                global: true,
+                ..Default::default()
+            },
+        ),
+    ] {
+        let free = at(len)[0].load_factors[0];
+        let restricted =
+            stripmain_constrained(&m, &[len], &[vec![1.0]], BoundaryCondition::SS, 1, spaces)
+                .unwrap()[0]
+                .load_factors[0];
+        assert!(
+            restricted >= free * (1.0 - 1e-9),
+            "{spaces:?} at {len}: {restricted} below {free}"
+        );
+    }
+}

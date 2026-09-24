@@ -12,112 +12,148 @@ use std::f64::consts::PI;
 
 /// The local elastic stiffness of a strip, CUFSM `klocal.m`.
 pub fn klocal(mat: &Material, t: f64, a: f64, b: f64, bc: BoundaryCondition, m_a: &[f64]) -> Mat {
+    let tm = m_a.len();
+    let mut k = Mat::zeros(8 * tm);
+    for m in 0..tm {
+        for p in 0..tm {
+            let ints = bc_i1_5(bc, m_a[m], m_a[p], a);
+            let blk = klocal_block(mat, t, b, m_a[m] * PI / a, m_a[p] * PI / a, ints, 1.0);
+            for r in 0..8 {
+                for c in 0..8 {
+                    k.set(8 * m + r, 8 * p + c, blk[r][c]);
+                }
+            }
+        }
+    }
+    k
+}
+
+/// One `(m, p)` block of `klocal.m`, from the five integrals. `e1_scale` multiplies E1 (only
+/// cFSM's `klocal_transv.m` uses it, at 1e8, to make the strips inextensible across their width).
+pub(crate) fn klocal_block(
+    mat: &Material,
+    t: f64,
+    b: f64,
+    c1: f64,
+    c2: f64,
+    ints: [f64; 5],
+    e1_scale: f64,
+) -> [[f64; 8]; 8] {
     let Material { ex, ey, vx, vy, g } = *mat;
-    let e1 = ex / (1.0 - vx * vy);
+    let e1 = ex / (1.0 - vx * vy) * e1_scale;
     let e2 = ey / (1.0 - vx * vy);
     let dx = ex * t.powi(3) / (12.0 * (1.0 - vx * vy));
     let dy = ey * t.powi(3) / (12.0 * (1.0 - vx * vy));
     let d1 = vx * ey * t.powi(3) / (12.0 * (1.0 - vx * vy));
     let dxy = g * t.powi(3) / 12.0;
-    let tm = m_a.len();
-    let mut k = Mat::zeros(8 * tm);
     let (b2, b3, b4, b5, b6) = (b * b, b.powi(3), b.powi(4), b.powi(5), b.powi(6));
-    for m in 0..tm {
-        for p in 0..tm {
-            let c1 = m_a[m] * PI / a;
-            let c2 = m_a[p] * PI / a;
-            let [i1, i2, i3, i4, i5] = bc_i1_5(bc, m_a[m], m_a[p], a);
-            let mut km = [[0.0; 4]; 4];
-            km[0][0] = e1 * i1 / b + g * b * i5 / 3.0;
-            km[0][1] = e2 * vx * (-1.0 / 2.0 / c2) * i3 - g * i5 / 2.0 / c2;
-            km[0][2] = -e1 * i1 / b + g * b * i5 / 6.0;
-            km[0][3] = e2 * vx * (-1.0 / 2.0 / c2) * i3 + g * i5 / 2.0 / c2;
+    let [i1, i2, i3, i4, i5] = ints;
+    let mut km = [[0.0; 4]; 4];
+    km[0][0] = e1 * i1 / b + g * b * i5 / 3.0;
+    km[0][1] = e2 * vx * (-1.0 / 2.0 / c2) * i3 - g * i5 / 2.0 / c2;
+    km[0][2] = -e1 * i1 / b + g * b * i5 / 6.0;
+    km[0][3] = e2 * vx * (-1.0 / 2.0 / c2) * i3 + g * i5 / 2.0 / c2;
 
-            km[1][0] = e2 * vx * (-1.0 / 2.0 / c1) * i2 - g * i5 / 2.0 / c1;
-            km[1][1] = e2 * b * i4 / 3.0 / c1 / c2 + g * i5 / b / c1 / c2;
-            km[1][2] = e2 * vx * (1.0 / 2.0 / c1) * i2 - g * i5 / 2.0 / c1;
-            km[1][3] = e2 * b * i4 / 6.0 / c1 / c2 - g * i5 / b / c1 / c2;
+    km[1][0] = e2 * vx * (-1.0 / 2.0 / c1) * i2 - g * i5 / 2.0 / c1;
+    km[1][1] = e2 * b * i4 / 3.0 / c1 / c2 + g * i5 / b / c1 / c2;
+    km[1][2] = e2 * vx * (1.0 / 2.0 / c1) * i2 - g * i5 / 2.0 / c1;
+    km[1][3] = e2 * b * i4 / 6.0 / c1 / c2 - g * i5 / b / c1 / c2;
 
-            km[2][0] = -e1 * i1 / b + g * b * i5 / 6.0;
-            km[2][1] = e2 * vx * (1.0 / 2.0 / c2) * i3 - g * i5 / 2.0 / c2;
-            km[2][2] = e1 * i1 / b + g * b * i5 / 3.0;
-            km[2][3] = e2 * vx * (1.0 / 2.0 / c2) * i3 + g * i5 / 2.0 / c2;
+    km[2][0] = -e1 * i1 / b + g * b * i5 / 6.0;
+    km[2][1] = e2 * vx * (1.0 / 2.0 / c2) * i3 - g * i5 / 2.0 / c2;
+    km[2][2] = e1 * i1 / b + g * b * i5 / 3.0;
+    km[2][3] = e2 * vx * (1.0 / 2.0 / c2) * i3 + g * i5 / 2.0 / c2;
 
-            km[3][0] = e2 * vx * (-1.0 / 2.0 / c1) * i2 + g * i5 / 2.0 / c1;
-            km[3][1] = e2 * b * i4 / 6.0 / c1 / c2 - g * i5 / b / c1 / c2;
-            km[3][2] = e2 * vx * (1.0 / 2.0 / c1) * i2 + g * i5 / 2.0 / c1;
-            km[3][3] = e2 * b * i4 / 3.0 / c1 / c2 + g * i5 / b / c1 / c2;
+    km[3][0] = e2 * vx * (-1.0 / 2.0 / c1) * i2 + g * i5 / 2.0 / c1;
+    km[3][1] = e2 * b * i4 / 6.0 / c1 / c2 - g * i5 / b / c1 / c2;
+    km[3][2] = e2 * vx * (1.0 / 2.0 / c1) * i2 + g * i5 / 2.0 / c1;
+    km[3][3] = e2 * b * i4 / 3.0 / c1 / c2 + g * i5 / b / c1 / c2;
 
-            let mut kf = [[0.0; 4]; 4];
-            let den = 420.0 * b3;
-            kf[0][0] = (5040.0 * dx * i1 - 504.0 * b2 * d1 * i2 - 504.0 * b2 * d1 * i3
-                + 156.0 * b4 * dy * i4
-                + 2016.0 * b2 * dxy * i5)
-                / den;
-            kf[0][1] = (2520.0 * b * dx * i1 - 462.0 * b3 * d1 * i2 - 42.0 * b3 * d1 * i3
-                + 22.0 * b5 * dy * i4
-                + 168.0 * b3 * dxy * i5)
-                / den;
-            kf[0][2] = (-5040.0 * dx * i1
-                + 504.0 * b2 * d1 * i2
-                + 504.0 * b2 * d1 * i3
-                + 54.0 * b4 * dy * i4
-                - 2016.0 * b2 * dxy * i5)
-                / den;
-            kf[0][3] = (2520.0 * b * dx * i1
-                - 42.0 * b3 * d1 * i2
-                - 42.0 * b3 * d1 * i3
-                - 13.0 * b5 * dy * i4
-                + 168.0 * b3 * dxy * i5)
-                / den;
+    let mut kf = [[0.0; 4]; 4];
+    let den = 420.0 * b3;
+    kf[0][0] = (5040.0 * dx * i1 - 504.0 * b2 * d1 * i2 - 504.0 * b2 * d1 * i3
+        + 156.0 * b4 * dy * i4
+        + 2016.0 * b2 * dxy * i5)
+        / den;
+    kf[0][1] = (2520.0 * b * dx * i1 - 462.0 * b3 * d1 * i2 - 42.0 * b3 * d1 * i3
+        + 22.0 * b5 * dy * i4
+        + 168.0 * b3 * dxy * i5)
+        / den;
+    kf[0][2] =
+        (-5040.0 * dx * i1 + 504.0 * b2 * d1 * i2 + 504.0 * b2 * d1 * i3 + 54.0 * b4 * dy * i4
+            - 2016.0 * b2 * dxy * i5)
+            / den;
+    kf[0][3] =
+        (2520.0 * b * dx * i1 - 42.0 * b3 * d1 * i2 - 42.0 * b3 * d1 * i3 - 13.0 * b5 * dy * i4
+            + 168.0 * b3 * dxy * i5)
+            / den;
 
-            kf[1][0] = (2520.0 * b * dx * i1 - 462.0 * b3 * d1 * i3 - 42.0 * b3 * d1 * i2
-                + 22.0 * b5 * dy * i4
-                + 168.0 * b3 * dxy * i5)
-                / den;
-            kf[1][1] = (1680.0 * b2 * dx * i1 - 56.0 * b4 * d1 * i2 - 56.0 * b4 * d1 * i3
-                + 4.0 * b6 * dy * i4
-                + 224.0 * b4 * dxy * i5)
-                / den;
-            kf[1][2] = (-2520.0 * b * dx * i1
-                + 42.0 * b3 * d1 * i2
-                + 42.0 * b3 * d1 * i3
-                + 13.0 * b5 * dy * i4
-                - 168.0 * b3 * dxy * i5)
-                / den;
-            kf[1][3] = (840.0 * b2 * dx * i1 + 14.0 * b4 * d1 * i2 + 14.0 * b4 * d1 * i3
-                - 3.0 * b6 * dy * i4
-                - 56.0 * b4 * dxy * i5)
-                / den;
+    kf[1][0] = (2520.0 * b * dx * i1 - 462.0 * b3 * d1 * i3 - 42.0 * b3 * d1 * i2
+        + 22.0 * b5 * dy * i4
+        + 168.0 * b3 * dxy * i5)
+        / den;
+    kf[1][1] = (1680.0 * b2 * dx * i1 - 56.0 * b4 * d1 * i2 - 56.0 * b4 * d1 * i3
+        + 4.0 * b6 * dy * i4
+        + 224.0 * b4 * dxy * i5)
+        / den;
+    kf[1][2] =
+        (-2520.0 * b * dx * i1 + 42.0 * b3 * d1 * i2 + 42.0 * b3 * d1 * i3 + 13.0 * b5 * dy * i4
+            - 168.0 * b3 * dxy * i5)
+            / den;
+    kf[1][3] = (840.0 * b2 * dx * i1 + 14.0 * b4 * d1 * i2 + 14.0 * b4 * d1 * i3
+        - 3.0 * b6 * dy * i4
+        - 56.0 * b4 * dxy * i5)
+        / den;
 
-            kf[2][0] = kf[0][2];
-            kf[2][1] = kf[1][2];
-            kf[2][2] = (5040.0 * dx * i1 - 504.0 * b2 * d1 * i2 - 504.0 * b2 * d1 * i3
-                + 156.0 * b4 * dy * i4
-                + 2016.0 * b2 * dxy * i5)
-                / den;
-            kf[2][3] = (-2520.0 * b * dx * i1 + 462.0 * b3 * d1 * i2 + 42.0 * b3 * d1 * i3
-                - 22.0 * b5 * dy * i4
-                - 168.0 * b3 * dxy * i5)
-                / den;
+    kf[2][0] = kf[0][2];
+    kf[2][1] = kf[1][2];
+    kf[2][2] = (5040.0 * dx * i1 - 504.0 * b2 * d1 * i2 - 504.0 * b2 * d1 * i3
+        + 156.0 * b4 * dy * i4
+        + 2016.0 * b2 * dxy * i5)
+        / den;
+    kf[2][3] = (-2520.0 * b * dx * i1 + 462.0 * b3 * d1 * i2 + 42.0 * b3 * d1 * i3
+        - 22.0 * b5 * dy * i4
+        - 168.0 * b3 * dxy * i5)
+        / den;
 
-            kf[3][0] = kf[0][3];
-            kf[3][1] = kf[1][3];
-            kf[3][2] = (-2520.0 * b * dx * i1 + 462.0 * b3 * d1 * i3 + 42.0 * b3 * d1 * i2
-                - 22.0 * b5 * dy * i4
-                - 168.0 * b3 * dxy * i5)
-                / den;
-            kf[3][3] = (1680.0 * b2 * dx * i1 - 56.0 * b4 * d1 * i2 - 56.0 * b4 * d1 * i3
-                + 4.0 * b6 * dy * i4
-                + 224.0 * b4 * dxy * i5)
-                / den;
+    kf[3][0] = kf[0][3];
+    kf[3][1] = kf[1][3];
+    kf[3][2] = (-2520.0 * b * dx * i1 + 462.0 * b3 * d1 * i3 + 42.0 * b3 * d1 * i2
+        - 22.0 * b5 * dy * i4
+        - 168.0 * b3 * dxy * i5)
+        / den;
+    kf[3][3] = (1680.0 * b2 * dx * i1 - 56.0 * b4 * d1 * i2 - 56.0 * b4 * d1 * i3
+        + 4.0 * b6 * dy * i4
+        + 224.0 * b4 * dxy * i5)
+        / den;
 
-            for r in 0..4 {
-                for c in 0..4 {
-                    k.set(8 * m + r, 8 * p + c, km[r][c] * t);
-                    k.set(8 * m + 4 + r, 8 * p + 4 + c, kf[r][c]);
-                }
-            }
+    let mut out = [[0.0; 8]; 8];
+    for r in 0..4 {
+        for c in 0..4 {
+            out[r][c] = km[r][c] * t;
+            out[4 + r][4 + c] = kf[r][c];
+        }
+    }
+    out
+}
+
+/// cFSM's transverse-only strip stiffness, CUFSM `klocal_transv.m`: `klocal` for one term with
+/// E1 multiplied by 1e8 and every integral but `I1` set to zero.
+pub fn klocal_transv(mat: &Material, t: f64, a: f64, b: f64, m: f64, bc: BoundaryCondition) -> Mat {
+    let [i1, ..] = bc_i1_5(bc, m, m, a);
+    let blk = klocal_block(
+        mat,
+        t,
+        b,
+        m * PI / a,
+        m * PI / a,
+        [i1, 0.0, 0.0, 0.0, 0.0],
+        1e8,
+    );
+    let mut k = Mat::zeros(8);
+    for r in 0..8 {
+        for c in 0..8 {
+            k.set(r, c, blk[r][c]);
         }
     }
     k
