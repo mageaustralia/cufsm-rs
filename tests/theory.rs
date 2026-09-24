@@ -502,3 +502,30 @@ fn cfsm_identifies_the_local_and_distortional_minima() {
         );
     }
 }
+
+/// A long member's lowest load factor falls as 1/L²: doubling a long half-wavelength (20 m, 50 m
+/// on a 150 mm channel) quarters it, to 0.2%. Much longer than that, rounding in the assembled
+/// matrices shows here too (at 100 m to 200 m the ratio is 3.93) - the limit
+/// `tests/dsm_guide_parity.rs` and the README describe.
+#[test]
+fn long_members_buckle_as_one_over_l_squared() {
+    use cufsm::template::{templatecalc, Shape, Template};
+    let m = templatecalc(
+        &Template::outside(Shape::C, 150.0, 50.0, 0.0, 2.0, 0.0, 8),
+        Material::isotropic(E, NU),
+    );
+    let m = loaded(
+        m,
+        Actions {
+            p: 1.0,
+            ..Default::default()
+        },
+    );
+    for a in [20_000.0, 50_000.0] {
+        let ratio = lowest(&m, a) / lowest(&m, 2.0 * a);
+        assert!(
+            (ratio / 4.0 - 1.0).abs() < 2e-3,
+            "L = {a}: halving ratio {ratio}"
+        );
+    }
+}

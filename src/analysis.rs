@@ -254,9 +254,39 @@ pub fn reduce(a: &Mat, r: &[Vec<(usize, f64)>]) -> Mat {
 /// Solves `K φ = λ Kg φ` for the `neigs` smallest positive `λ`. `K` must be positive definite.
 pub fn buckling_eigen(k: &Mat, kg: &Mat, neigs: usize) -> Result<(Vec<f64>, Vec<Vec<f64>>), Error> {
     let n = k.n;
-    let k = k.symmetrised();
-    let kg = kg.symmetrised();
-    let l = cholesky(&k).map_err(|dof| Error::NotPositiveDefinite { dof })?;
+    let mut k = k.symmetrised();
+    let mut kg = kg.symmetrised();
+    // Unscaled first: it keeps the most digits of a long global mode. A section with strips far
+    // narrower than their neighbours (0.02 in beside 0.68 in, in one of the AISI DSM Design Guide's
+    // CUFSM models) can make K too ill-conditioned for that factorisation to finish; then K is
+    // scaled to a unit diagonal, D K D and D Kg D (same eigenvalues, modes D times these), which
+    // factors whenever the scaled matrix is well enough conditioned.
+    let mut scale: Option<Vec<f64>> = None;
+    let l = match cholesky(&k) {
+        Ok(l) => l,
+        Err(_) => {
+            let d: Vec<f64> = (0..n)
+                .map(|i| {
+                    let v = k.get(i, i);
+                    if v > 0.0 && v.is_finite() {
+                        1.0 / v.sqrt()
+                    } else {
+                        1.0
+                    }
+                })
+                .collect();
+            for i in 0..n {
+                for j in 0..n {
+                    let f = d[i] * d[j];
+                    k.data[i * n + j] *= f;
+                    kg.data[i * n + j] *= f;
+                }
+            }
+            let l = cholesky(&k).map_err(|dof| Error::NotPositiveDefinite { dof })?;
+            scale = Some(d);
+            l
+        }
+    };
     // C = L⁻¹ Kg L⁻ᵀ: X = L⁻¹ Kg column by column, then C = L⁻¹ Xᵀ (Kg is symmetric).
     let mut x = Mat::zeros(n);
     let mut col = vec![0.0; n];
@@ -296,6 +326,11 @@ pub fn buckling_eigen(k: &Mat, kg: &Mat, neigs: usize) -> Result<(Vec<f64>, Vec<
         lfs.push(1.0 / mu[i]);
         let mut phi: Vec<f64> = (0..n).map(|r| y.get(r, i)).collect();
         backward_t(&l, &mut phi);
+        if let Some(d) = &scale {
+            for (v, di) in phi.iter_mut().zip(d) {
+                *v *= di;
+            }
+        }
         modes.push(phi);
     }
     Ok((lfs, modes))

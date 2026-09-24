@@ -54,6 +54,7 @@ The point of a port is that it gives CUFSM's answers. Every claim below is a tes
 |---|---|---|
 | **CUFSM itself**, its MATLAB source run unmodified under GNU Octave (`oracle/`) | 28 cases: lipped, rounded, unequal and plain channels, Z in four loadings, hat, angle, plate, outside-dimension templates; all five end conditions with up to 8 terms; fixities, constraints and springs. Stage by stage: section properties, stresses, each strip's local and global matrices, the assembled `K` and `Kg`, then the load factors and first modes. | Matrices, properties and stresses to 1e-12. 7,000+ load factors and 450+ mode shapes (MAC to 1 - 1e-8). |
 | **MATLAB CUFSM** v5.66, compiled, under the MATLAB R2025b Runtime (from the CufsmSharp project) | 1,480 load factors, a lipped channel with 2.5 mm corner radii, compression and bending. | Local modes to 1e-14 - 1e-12. |
+| **AISI Direct Strength Method Design Guide (2006)**: the CUFSM models behind its worked examples, with the results CUFSM saved then (`examples/2006_dsm_design_guide` in CUFSM) | 43 runs: lipped and plain channels, Z, hats, angles, a sigma, a rack upright, a built-up section, deck panels; compression and bending about either axis; some pinned or constrained. | 20,000+ load factors to 1e-5, the 2006 results' own precision, where cond(K) < 1e8. |
 | **pyCUFSM**, an independent Python port | 5,900+ load factors on every fixture case it can run. | Within its own noise (below). |
 | **Theory**, no oracle (`tests/theory.rs`) | A simply supported plate at k = 4 with its minimum at a square half-wave; an outstand at k = 0.425 + (b/a)²; a long I-section at the Euler load, converging with the mesh; every eigenpair satisfying K φ = λ Kg φ to round-off; invariance to E, stress scale, mirroring, renumbering and translation; convergence from above under mesh refinement; springs that only stiffen, and a stiff one that approaches a fixed DOF. | All hold. |
 | **CUFSM's template** | Every node of 14 template cases. | To 1e-12. |
@@ -95,6 +96,15 @@ and no more.
 - On a doubly symmetric section, cFSM's axial orthogonalisation meets repeated eigenvalues, so
   its modal basis, and the vector-normalised classification with it, is not unique in CUFSM
   either. The natural basis is, and that is what such a section is compared on.
+- Four of the DSM Design Guide files carry a saved curve that is not their saved model's:
+  today's CUFSM, run on each file's own model, gives this crate's values, not the file's
+  (`cwlip_modified.mat`: 1.62269 at 1.07 in, where the file says 83.33653). They are named in
+  `tests/dsm_guide_parity.rs` and left out, as are the runs restricted by the 2006 cFSM, whose
+  spaces were defined differently.
+- A few of those models have strips far narrower than their neighbours (0.02 in beside 0.68 in),
+  which leaves K too ill-conditioned for a plain Cholesky factorisation. This crate then retries
+  with K scaled to a unit diagonal. It keeps the unscaled factorisation otherwise, because that
+  one keeps more digits of long global modes.
 - pyCUFSM (as released on PyPI) mishandles fixed DOFs and constraints. Its `constr_user` drops a
   column and leaves stale identity columns, so fixed DOFs at the high end of the numbering come
   back free: a plate simply supported on both long edges buckles as an outstand. It also cannot
@@ -119,6 +129,7 @@ lipped channel's signature curve (100 half-wavelengths, 10 modes each) takes:
 ```sh
 python3 oracle/cases.py > oracle/cases.json
 CUFSM_ROOT=<cufsm-git checkout> oracle/run_octave.sh oracle/cases.json tests/fixtures/cufsm_octave.json
+octave-cli oracle/octave/extract_dsm_guide.m <cufsm-git>/examples/2006_dsm_design_guide/files_and_scripts tests/fixtures/dsm_guide_2006.json
 python3 oracle/run_pycufsm.py tests/fixtures/cufsm_octave.json tests/fixtures/pycufsm.json   # NumPy < 2
 cargo run --example dump_matrices -- matlab AXIAL 300 > km.json && python3 oracle/high_precision.py km.json
 ```
@@ -128,7 +139,8 @@ call; it is never kept in this repository.
 
 ## Licence
 
-MIT. See [`LICENSE`](LICENSE), which carries CUFSM's notice as well as this port's. The MATLAB
-reference values in `tests/fixtures/matlab_cufsm566.json` come from the
+MIT. See [`LICENSE`](LICENSE), which carries CUFSM's notice as well as this port's. The DSM Design
+Guide models and results in `tests/fixtures/dsm_guide_2006.json` are extracted from CUFSM's own
+repository (MIT). The MATLAB reference values in `tests/fixtures/matlab_cufsm566.json` come from the
 [CufsmSharp](https://github.com/BizimGri/CufsmSharp) project (MIT). Its `about` field
 records their provenance.

@@ -158,7 +158,19 @@ pub fn cond_estimate(m: &Model, a: f64, bc: BoundaryCondition, m_a: &[f64]) -> f
         Some(rb) => reduce(&k, &rb),
         None => k,
     };
-    let l = cufsm::dense::cholesky(&k.symmetrised()).expect("K positive definite");
+    // As the analysis does: unscaled, or scaled to a unit diagonal where unscaled K does not factor.
+    let ks = k.symmetrised();
+    let l = cufsm::dense::cholesky(&ks).unwrap_or_else(|_| {
+        let n = ks.n;
+        let d: Vec<f64> = (0..n).map(|i| 1.0 / ks.get(i, i).sqrt()).collect();
+        let mut sc = ks.clone();
+        for i in 0..n {
+            for j in 0..n {
+                sc.data[i * n + j] *= d[i] * d[j];
+            }
+        }
+        cufsm::dense::cholesky(&sc).expect("scaled K positive definite")
+    });
     let piv: Vec<f64> = (0..l.n).map(|j| l.get(j, j)).collect();
     (piv.iter().cloned().fold(0.0, f64::max) / piv.iter().cloned().fold(f64::INFINITY, f64::min))
         .powi(2)
