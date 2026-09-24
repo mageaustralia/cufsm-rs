@@ -1,0 +1,22 @@
+[package]
+name = "cufsm-rs"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT"
+authors = ["Matthew Campbell <mcampbell@mageaustralia.com.au>"]
+description = "Independent, dependency-free Rust port of CUFSM: elastic buckling of thin-walled sections by the finite strip method."
+readme = "README.md"
+homepage = "https://mageengineering.com.au/"
+repository = "https://github.com/mageaustralia/cufsm-rs"
+keywords = ["finite-strip", "buckling", "cold-formed", "cufsm", "structural"]
+categories = ["mathematics", "science"]
+exclude = ["tests/fixtures", "oracle"]
+
+[lib]
+name = "cufsm"
+
+[dependencies]
+
+[dev-dependencies]
+serde_json = "1"
