@@ -138,8 +138,8 @@ curve, 100 half-wavelengths x 10 modes:
 | 45 nodes | 180 | 0.22 s | 2.8 ms |
 | 77 nodes | 308 | 0.58 s | 14 ms |
 
-For comparison, on one 148-DOF section with the same 100 lengths: this crate takes about 0.1 s
-multi-threaded (0.23 s on one thread). CUFSM's own assembly and a LAPACK dense solve take 3.5 s
+For comparison, on one 148-DOF section with the same 100 lengths: this crate takes 0.14 s
+multi-threaded (0.27 s on one thread). CUFSM's own assembly and a LAPACK dense solve take 3.5 s
 under GNU Octave, and pyCUFSM takes 7.7 s. MATLAB itself was not available to time.
 
 ## Regenerating the references
