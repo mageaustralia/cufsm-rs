@@ -1299,27 +1299,19 @@ pub fn classify_with(
     ospace: OSpace,
 ) -> Result<Vec<Vec<[f64; 4]>>, Error> {
     let ndof_m = 4 * model.nodes.len();
-    let mut out = vec![];
-    for r in results {
+    // Each length on its own thread (none on wasm), in order.
+    crate::analysis::parallel_map(results, |r| {
         let (bvl, ngm, ndm, nlm) = base_column(model, r.length, bc, &r.m_terms)?;
         let bv = base_update_with(
             model, &bvl, r.length, bc, &r.m_terms, ngm, ndm, nlm, orth, norm, ospace,
         )?;
-        let mut per = vec![];
-        for mode in &r.modes {
-            per.push(mode_class(
-                &bv,
-                mode,
-                ngm,
-                ndm,
-                nlm,
-                r.m_terms.len(),
-                ndof_m,
-            )?);
-        }
-        out.push(per);
-    }
-    Ok(out)
+        r.modes
+            .iter()
+            .map(|mode| mode_class(&bv, mode, ngm, ndm, nlm, r.m_terms.len(), ndof_m))
+            .collect::<Result<Vec<_>, _>>()
+    })
+    .into_iter()
+    .collect()
 }
 
 /// Classifies every mode of an analysis into G, D, L and O, CUFSM `classify.m`, with the basis
@@ -1333,25 +1325,17 @@ pub fn classify(
     norm: Norm,
 ) -> Result<Vec<Vec<[f64; 4]>>, Error> {
     let ndof_m = 4 * model.nodes.len();
-    let mut out = vec![];
-    for r in results {
+    // Each length on its own thread (none on wasm), in order.
+    crate::analysis::parallel_map(results, |r| {
         let (bvl, ngm, ndm, nlm) = base_column(model, r.length, bc, &r.m_terms)?;
         let bv = base_update(
             model, &bvl, r.length, bc, &r.m_terms, ngm, ndm, nlm, orth, norm,
         )?;
-        let mut per = vec![];
-        for mode in &r.modes {
-            per.push(mode_class(
-                &bv,
-                mode,
-                ngm,
-                ndm,
-                nlm,
-                r.m_terms.len(),
-                ndof_m,
-            )?);
-        }
-        out.push(per);
-    }
-    Ok(out)
+        r.modes
+            .iter()
+            .map(|mode| mode_class(&bv, mode, ngm, ndm, nlm, r.m_terms.len(), ndof_m))
+            .collect::<Result<Vec<_>, _>>()
+    })
+    .into_iter()
+    .collect()
 }

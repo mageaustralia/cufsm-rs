@@ -253,6 +253,19 @@ pub fn reduce(a: &Mat, r: &[Vec<(usize, f64)>]) -> Mat {
 
 /// Solves `K φ = λ Kg φ` for the `neigs` smallest positive `λ`. `K` must be positive definite.
 pub fn buckling_eigen(k: &Mat, kg: &Mat, neigs: usize) -> Result<(Vec<f64>, Vec<Vec<f64>>), Error> {
+    // The band path first; it proves its answer with a Sturm count or declines.
+    if let Some(r) = crate::banded::buckling_eigen_banded(k, kg, neigs) {
+        return Ok(r);
+    }
+    buckling_eigen_dense(k, kg, neigs)
+}
+
+/// The dense solve: every eigenvalue, the wanted modes. Always available, always complete.
+pub fn buckling_eigen_dense(
+    k: &Mat,
+    kg: &Mat,
+    neigs: usize,
+) -> Result<(Vec<f64>, Vec<Vec<f64>>), Error> {
     let n = k.n;
     let mut k = k.symmetrised();
     let mut kg = kg.symmetrised();
@@ -345,6 +358,57 @@ pub fn normalise_mode(mode: &mut [f64]) {
     }
 }
 
+/// One length of [`stripmain`].
+fn stripmain_one(
+    model: &Model,
+    a: f64,
+    m_raw: &[f64],
+    bc: BoundaryCondition,
+    neigs: usize,
+) -> Result<LengthResult, Error> {
+    if a.is_nan() || a <= 0.0 {
+        return Err(Error::InvalidModel(format!("length {a} is not positive")));
+    }
+    let m_a = msort(m_raw);
+    if m_a.is_empty() {
+        return Err(Error::InvalidModel(format!(
+            "no longitudinal terms at length {a}"
+        )));
+    }
+    let (k, kg) = assemble(model, a, bc, &m_a);
+    let r = constraint_basis(model, m_a.len());
+    let (kff, kgff) = match &r {
+        Some(r) => (reduce(&k, r), reduce(&kg, r)),
+        None => (k, kg),
+    };
+    let (lfs, reduced) = buckling_eigen(&kff, &kgff, neigs)?;
+    let modes = reduced
+        .into_iter()
+        .map(|q| {
+            let mut full = match &r {
+                Some(r) => {
+                    let mut f = vec![0.0; 4 * model.nodes.len() * m_a.len()];
+                    for (j, col) in r.iter().enumerate() {
+                        for &(row, v) in col {
+                            f[row] += v * q[j];
+                        }
+                    }
+                    f
+                }
+                None => q,
+            };
+            normalise_mode(&mut full);
+            full
+        })
+        .collect();
+    Ok(LengthResult {
+        length: a,
+        m_terms: m_a,
+        load_factors: lfs,
+        modes,
+    })
+}
+
 /// A finite strip analysis at every length, CUFSM `stripmain.m`.
 ///
 /// `m_all[i]` holds the longitudinal terms for `lengths[i]` (`[1.0]` for the signature curve).
@@ -364,51 +428,40 @@ pub fn stripmain(
             m_all.len()
         )));
     }
-    let mut out = Vec::with_capacity(lengths.len());
-    for (&a, m_raw) in lengths.iter().zip(m_all) {
-        if a.is_nan() || a <= 0.0 {
-            return Err(Error::InvalidModel(format!("length {a} is not positive")));
+    // Every length is its own problem: solved on as many threads as the machine offers (one on
+    // wasm, which has none), and returned in order. The results do not depend on the threads.
+    let jobs: Vec<(f64, &Vec<f64>)> = lengths.iter().copied().zip(m_all).collect();
+    let results: Vec<Result<LengthResult, Error>> = parallel_map(&jobs, |&(a, m_raw)| {
+        stripmain_one(model, a, m_raw, bc, neigs)
+    });
+    results.into_iter().collect()
+}
+
+/// `f` over `items` on up to `available_parallelism` scoped threads, results in order; one
+/// thread on wasm.
+pub(crate) fn parallel_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let threads = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+            .min(items.len());
+        if threads > 1 {
+            let chunk = items.len().div_ceil(threads);
+            let f = &f;
+            return std::thread::scope(|s| {
+                let handles: Vec<_> = items
+                    .chunks(chunk)
+                    .map(|c| s.spawn(move || c.iter().map(f).collect::<Vec<R>>()))
+                    .collect();
+                handles
+                    .into_iter()
+                    .flat_map(|h| h.join().expect("a length's solve panicked"))
+                    .collect()
+            });
         }
-        let m_a = msort(m_raw);
-        if m_a.is_empty() {
-            return Err(Error::InvalidModel(format!(
-                "no longitudinal terms at length {a}"
-            )));
-        }
-        let (k, kg) = assemble(model, a, bc, &m_a);
-        let r = constraint_basis(model, m_a.len());
-        let (kff, kgff) = match &r {
-            Some(r) => (reduce(&k, r), reduce(&kg, r)),
-            None => (k, kg),
-        };
-        let (lfs, reduced) = buckling_eigen(&kff, &kgff, neigs)?;
-        let modes = reduced
-            .into_iter()
-            .map(|q| {
-                let mut full = match &r {
-                    Some(r) => {
-                        let mut f = vec![0.0; 4 * model.nodes.len() * m_a.len()];
-                        for (j, col) in r.iter().enumerate() {
-                            for &(row, v) in col {
-                                f[row] += v * q[j];
-                            }
-                        }
-                        f
-                    }
-                    None => q,
-                };
-                normalise_mode(&mut full);
-                full
-            })
-            .collect();
-        out.push(LengthResult {
-            length: a,
-            m_terms: m_a,
-            load_factors: lfs,
-            modes,
-        });
     }
-    Ok(out)
+    items.iter().map(f).collect()
 }
 
 /// The signature curve, CUFSM `signature_ss.m`: simply supported, one longitudinal term, at 100

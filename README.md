@@ -65,9 +65,17 @@ The point of a port is that it gives CUFSM's answers. Every claim below is a tes
 
 ### Accuracy, honestly
 
-CUFSM solves `K φ = λ Kg φ` with MATLAB's `eigs`. This crate solves it densely instead
-(Cholesky of `K`, then every eigenpair of `L⁻¹ Kg L⁻ᵀ` by Householder and implicit QL), which cannot
-miss a mode and has no convergence tolerance.
+CUFSM solves `K φ = λ Kg φ` with MATLAB's `eigs`. This crate solves it one of two ways, and
+neither can miss a mode:
+
+- **The band path** (models of 60 DOF and more). The strips couple only neighbouring nodes,
+  so after a reverse Cuthill-McKee reordering `K` and `Kg` are narrow bands. `K` is factored in
+  band, and Lanczos with full re-orthogonalisation on `L⁻¹ Kg L⁻ᵀ` finds the wanted modes. The
+  answer is then proved with a Sturm count: `K - σ Kg` has as many negative pivots as there are
+  load factors below `σ` (Sylvester's law of inertia). If the count disagrees, Lanczos does not
+  converge, or the band is not narrow, the dense path takes over.
+- **The dense path.** Cholesky of `K`, every eigenvalue of `L⁻¹ Kg L⁻ᵀ` by Householder and implicit
+  QL, and inverse iteration for the wanted modes.
 
 For local and distortional modes the four implementations agree to 12+ digits. Checked against
 the same matrices solved in 40-digit arithmetic, on a well-conditioned mode this crate was out by
@@ -120,16 +128,19 @@ and no more.
 
 ## Cost
 
-Every eigenvalue is found at every length (the modes only for the load factors asked for), so
-the cost grows as the cube of the DOF count. On one
-core of an Apple M-series laptop (`cargo run --release --example timing`), a 200 x 76 x 15 x 1.9
-lipped channel's signature curve (100 half-wavelengths, 10 modes each) takes:
+Each length is solved on its own thread (single-threaded on wasm). On an Apple M-series laptop
+(`cargo run --release --example timing`), a 200 x 76 x 15 x 1.9 lipped channel's signature
+curve, 100 half-wavelengths x 10 modes:
 
 | Mesh | DOF | Signature curve | cFSM classification, per length |
 |---|---|---|---|
-| 29 nodes | 116 | 0.34 s | 3.5 ms |
-| 45 nodes | 180 | 1.3 s | 10 ms |
-| 77 nodes | 308 | 6.7 s | 50 ms |
+| 29 nodes | 116 | 0.10 s | 1.2 ms |
+| 45 nodes | 180 | 0.22 s | 2.8 ms |
+| 77 nodes | 308 | 0.58 s | 14 ms |
+
+For comparison, on one 148-DOF section with the same 100 lengths: this crate takes about 0.1 s
+multi-threaded (0.23 s on one thread). CUFSM's own assembly and a LAPACK dense solve take 3.5 s
+under GNU Octave, and pyCUFSM takes 7.7 s. MATLAB itself was not available to time.
 
 ## Regenerating the references
 

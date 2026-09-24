@@ -33,6 +33,7 @@
 #![allow(clippy::needless_range_loop)]
 
 pub mod analysis;
+mod banded;
 pub mod bc;
 pub mod cfsm;
 pub mod cutwp;
