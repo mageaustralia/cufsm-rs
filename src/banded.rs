@@ -269,6 +269,8 @@ pub fn buckling_eigen_banded(k: &Mat, kg: &Mat, neigs: usize) -> Option<(Vec<f64
                 .partial_cmp(&theta[a])
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
+        // The next Ritz value beyond those wanted places the Sturm shift (below).
+        let next_lf = idx.get(neigs).map(|&i| 1.0 / theta[i]);
         idx.truncate(neigs);
         let converged = idx.len() == neigs.min(mm)
             && idx
@@ -279,8 +281,16 @@ pub fn buckling_eigen_banded(k: &Mat, kg: &Mat, neigs: usize) -> Option<(Vec<f64
             continue;
         }
         let lfs: Vec<f64> = idx.iter().map(|&i| 1.0 / theta[i]).collect();
-        // Sturm check just above the last load factor found: exactly that many lie below.
-        let sigma = lfs[lfs.len() - 1] * (1.0 + 1e-7);
+        // Sturm check: exactly that many load factors lie below σ. σ goes halfway to the next Ritz
+        // value, where K - σ Kg is well away from singular; right against the last one found, its
+        // LDLᵀ meets a pivot at round-off on an ill-conditioned section and proves nothing. Any σ
+        // below the true next load factor proves the same thing, and one past it (the next Ritz
+        // value overestimated) counts one too many and declines.
+        let last = lfs[lfs.len() - 1];
+        let sigma = match next_lf {
+            Some(nx) if nx > last * (1.0 + 1e-6) => last + 0.5 * (nx - last),
+            _ => last * (1.0 + 1e-7),
+        };
         if negative_pivots(&kb, &kgb, sigma)? != lfs.len() {
             return None;
         }
@@ -365,6 +375,35 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// One mode at every one of 90 half-wavelengths from 10 to 6000 mm (the lowest-mode signature
+    /// curve a design check runs): the band path answers at every length. With the Sturm shift
+    /// hard against the load factor, 11 of these lengths met a pivot at round-off and fell back.
+    #[test]
+    fn band_path_answers_a_whole_one_mode_signature_curve() {
+        let mut m = templatecalc(
+            &Template::outside(Shape::C, 200.0, 76.0, 15.0, 1.9, 0.0, 12),
+            Material::isotropic(200000.0, 0.3),
+        );
+        let p = grosprop(&m);
+        stresgen(
+            &mut m,
+            &Actions {
+                p: 1.0,
+                ..Default::default()
+            },
+            &p,
+            false,
+        );
+        for i in 0..90 {
+            let a = 10f64.powf(1.0 + (6000f64.log10() - 1.0) * i as f64 / 89.0);
+            let (k, kg) = assemble(&m, a, BoundaryCondition::SS, &[1.0]);
+            assert!(
+                buckling_eigen_banded(&k, &kg, 1).is_some(),
+                "declined at {a:.1} mm"
+            );
         }
     }
 
