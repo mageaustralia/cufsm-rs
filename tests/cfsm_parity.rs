@@ -1,6 +1,7 @@
 //! cFSM against CUFSM's own `analysis/cFSM/` code, run under Octave (see `oracle/`), on six
 //! sections in compression: sharp and rounded lipped C, lipped Z, plain channel, hat, and a
-//! branched I-section.
+//! branched I-section - and the lipped C again with a fixed DOF, a constraint and springs, for
+//! the restricted analysis's intersection with the constrained space.
 //!
 //! Several cFSM steps take `null()` or `eig()`, so individual base vectors are not unique. What is
 //! compared is what does not depend on the basis:
@@ -229,6 +230,11 @@ fn check_classification(orth: Orth, key: &str, skip_degenerate: bool) -> usize {
     for r in &cfsm_cases() {
         let name = r["name"].as_str().unwrap();
         if skip_degenerate && name.contains("i-section") {
+            continue;
+        }
+        // The oracle classifies the bare strips' modes; a case with fixities, constraints or
+        // springs is covered by the restricted load factors instead.
+        if name.contains("fixed and sprung") {
             continue;
         }
         let m = model_of(r);

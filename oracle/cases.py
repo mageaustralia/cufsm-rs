@@ -157,5 +157,12 @@ cases.append(cf("cfsm lipped-z", lz))
 cases.append(cf("cfsm plain channel", {"template": template(1, 150, 50, 50, 0, 0, 0, 2.0)}))
 cases.append(cf("cfsm hat", {"node": hat_node, "elem": hat_elem}))
 cases.append(cf("cfsm i-section", i_section(200.0, 100.0, 5.0, 8.0, 4, 2)))
+# cFSM with a fixed DOF, a master-slave constraint and springs: CUFSM intersects the modal space
+# with the constrained one, R = null([null(Rmode') null(Ruser')]').
+c_fix = cf("cfsm lipped-c fixed and sprung", small)
+c_fix["fix"] = [[6, 7]]
+c_fix["constraints"] = [[1, 2, 1.0, 11, 2]]
+c_fix["springs"] = springs_a
+cases.append(c_fix)
 
 print(json.dumps(cases, indent=1))

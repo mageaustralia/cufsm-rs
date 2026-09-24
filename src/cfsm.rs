@@ -920,7 +920,8 @@ pub fn mode_select(
 
 /// The finite strip analysis restricted to `spaces`, CUFSM `stripmain.m` with modal constraints
 /// (the natural basis spans the same spaces as any orthogonalised one, and the restricted load
-/// factors depend only on the space). Sections without fixed DOFs, constraints or springs.
+/// factors depend only on the space). Fixed DOFs and constraints narrow the space further, as in
+/// CUFSM; springs act through `K`.
 pub fn stripmain_constrained(
     model: &Model,
     lengths: &[f64],
@@ -930,28 +931,35 @@ pub fn stripmain_constrained(
     spaces: Spaces,
 ) -> Result<Vec<LengthResult>, Error> {
     model.validate()?;
-    if model.nodes.iter().any(|n| n.free.iter().any(|f| !f))
-        || !model.constraints.is_empty()
-        || !model.springs.is_empty()
-    {
-        return Err(Error::InvalidModel(
-            "cFSM here takes no fixed DOFs, constraints or springs".into(),
-        ));
-    }
+    let ndof_m = 4 * model.nodes.len();
     let mut out = vec![];
     for (&a, m_raw) in lengths.iter().zip(m_all) {
         let m_a = msort(m_raw);
         let (bvl, ngm, ndm, nlm) = base_column(model, a, bc, &m_a)?;
-        let r = mode_select(
-            &bvl,
-            ngm,
-            ndm,
-            nlm,
-            spaces,
-            4 * model.nodes.len(),
-            m_a.len(),
-        );
-        let (k, kg) = assemble_strips(model, a, bc, &m_a);
+        let mut r = mode_select(&bvl, ngm, ndm, nlm, spaces, ndof_m, m_a.len());
+        // Fixed DOFs and constraints: the modal space intersected with the constrained one, as
+        // stripmain.m forms it, R = null([null(Rmodeᵀ) null(Ruserᵀ)]ᵀ). Springs are in K alone.
+        if let Some(cols) = crate::analysis::constraint_basis(model, m_a.len()) {
+            let mut ruser = RMat::zeros(ndof_m * m_a.len(), cols.len());
+            for (j, col) in cols.iter().enumerate() {
+                for &(row, v) in col {
+                    ruser.set(row, j, v);
+                }
+            }
+            let rm0 = null(&r.t());
+            let ru0 = null(&ruser.t());
+            r = null(&rm0.hcat(&ru0).t());
+        }
+        if r.c == 0 {
+            out.push(LengthResult {
+                length: a,
+                m_terms: m_a,
+                load_factors: vec![],
+                modes: vec![],
+            });
+            continue;
+        }
+        let (k, kg) = crate::analysis::assemble(model, a, bc, &m_a);
         let (k, kg) = (RMat::from_square(&k), RMat::from_square(&kg));
         let kff = r.t().mul(&k).mul(&r).to_square();
         let kgff = r.t().mul(&kg).mul(&r).to_square();

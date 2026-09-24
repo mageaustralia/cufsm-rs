@@ -197,6 +197,25 @@ for c = 1:numel(cases)
           [k, kg] = trans(elprop(i, 3), k_l, kg_l, ma);
           [KL, KgL] = assemble(KL, KgL, k, kg, elem(i, 2), elem(i, 3), nn, ma);
         end
+        % Springs into K and constraints into R, as stripmain.m does with modal constraints on.
+        if ~isempty(springs) && size(springs, 2) == 10 && springs(1, 1) ~= 0
+          for si = 1:size(springs, 1)
+            ks_l = spring_klocal(springs(si, 4), springs(si, 5), springs(si, 6), springs(si, 7), al, BC, ma, springs(si, 9), springs(si, 10) * al);
+            ni_s = springs(si, 2); nj_s = springs(si, 3);
+            alpha_s = 0;
+            if nj_s ~= 0
+              dxs = node(nj_s, 2) - node(ni_s, 2); dzs = node(nj_s, 3) - node(ni_s, 3);
+              if sqrt(dxs^2 + dzs^2) >= 1e-10 && springs(si, 8) ~= 0, alpha_s = atan2(dzs, dxs); end
+            end
+            KL = spring_assemble(KL, spring_trans(alpha_s, ks_l, ma), ni_s, nj_s, nn, ma);
+          end
+        end
+        if constr_BCFlag(node, constraints) ~= 0
+          Rm0 = null(R');
+          Ru0 = null(constr_user(node, constraints, ma)');
+          R = null([Rm0 Ru0]');
+        end
+        if isempty(R) || size(R, 2) == 0, lfs{l} = []; continue; end
         ev = eig(full(R' * KL * R), full((R' * KgL * R + (R' * KgL * R)') / 2));
         ev = real(ev(abs(imag(ev)) < 1e-5 * abs(real(ev)) & real(ev) > 0));
         ev = sort(ev);
