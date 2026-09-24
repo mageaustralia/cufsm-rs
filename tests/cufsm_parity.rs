@@ -165,7 +165,7 @@ fn load_factors_and_modes_match_cufsm() {
         for (l, res) in got.iter().enumerate() {
             let w = &want_lf[l];
             let cond = cond_estimate(&m, lengths[l], bc_of(&r), &m_all[l]);
-            let tol = load_factor_tolerance(cond);
+
             let n = w.len().min(res.load_factors.len());
             assert!(
                 n > 0,
@@ -173,6 +173,7 @@ fn load_factors_and_modes_match_cufsm() {
                 lengths[l]
             );
             for i in 0..n {
+                let tol = load_factor_tolerance(cond, w[i], w[0]);
                 let d = (res.load_factors[i] / w[i] - 1.0).abs();
                 if d > worst.0 {
                     worst = (d, format!("{name} length {} mode {}", lengths[l], i + 1));

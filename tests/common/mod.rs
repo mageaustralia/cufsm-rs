@@ -141,8 +141,11 @@ pub fn cond_estimate(m: &Model, a: f64, bc: BoundaryCondition, m_a: &[f64]) -> f
         .powi(2)
 }
 
-/// Load factors are held to `1e-10` plus `1e-12` times the condition estimate: a local or
-/// distortional mode to the fixed part, a global mode at a long length to its rounding limit.
-pub fn load_factor_tolerance(cond: f64) -> f64 {
-    1e-10 + 1e-12 * cond
+/// Load factor `lf` of a length whose lowest is `lf1` is held to `1e-10` plus `1e-12` times the
+/// condition estimate, times `lf / lf1`: a local or distortional mode to the fixed part, a global
+/// mode at a long length to its rounding limit. The ratio because the solve fixes `1/λ` to an
+/// absolute accuracy set by the largest `1/λ`, so a higher mode carries proportionally more
+/// relative error.
+pub fn load_factor_tolerance(cond: f64, lf: f64, lf1: f64) -> f64 {
+    (1e-10 + 1e-12 * cond) * (lf / lf1).max(1.0)
 }

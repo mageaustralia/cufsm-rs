@@ -60,9 +60,9 @@ fn load_factors_match_matlab_cufsm() {
         let got = stripmain(&m, &lengths, &m_all, BoundaryCondition::SS, 10).unwrap();
         let want = rows_of(&c["load_factors"]);
         for (l, res) in got.iter().enumerate() {
-            let tol =
-                load_factor_tolerance(cond_estimate(&m, lengths[l], BoundaryCondition::SS, &[1.0]));
+            let cond = cond_estimate(&m, lengths[l], BoundaryCondition::SS, &[1.0]);
             for (i, w) in want[l].iter().enumerate().filter(|(_, w)| **w > 0.0) {
+                let tol = load_factor_tolerance(cond, *w, want[l][0]);
                 let d = (res.load_factors[i] / w - 1.0).abs();
                 if d > worst.0 {
                     worst = (d, format!("{name} length {} mode {}", lengths[l], i + 1));
