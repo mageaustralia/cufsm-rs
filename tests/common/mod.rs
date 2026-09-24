@@ -123,3 +123,26 @@ pub fn mac(a: &[f64], b: &[f64]) -> f64 {
     let bb: f64 = b.iter().map(|x| x * x).sum();
     ab * ab / (aa * bb)
 }
+
+/// The reduced elastic stiffness's condition estimate at one length: (largest / smallest Cholesky
+/// pivot)². A global mode at a long length rests on a near-cancellation of membrane terms, so
+/// rounding moves its load factor by about eps x this in any double-precision solver.
+pub fn cond_estimate(m: &Model, a: f64, bc: BoundaryCondition, m_a: &[f64]) -> f64 {
+    use cufsm::analysis::{assemble, constraint_basis, msort, reduce};
+    let terms = msort(m_a);
+    let (k, _) = assemble(m, a, bc, &terms);
+    let k = match constraint_basis(m, terms.len()) {
+        Some(rb) => reduce(&k, &rb),
+        None => k,
+    };
+    let l = cufsm::dense::cholesky(&k.symmetrised()).expect("K positive definite");
+    let piv: Vec<f64> = (0..l.n).map(|j| l.get(j, j)).collect();
+    (piv.iter().cloned().fold(0.0, f64::max) / piv.iter().cloned().fold(f64::INFINITY, f64::min))
+        .powi(2)
+}
+
+/// Load factors are held to `1e-10` plus `1e-12` times the condition estimate: a local or
+/// distortional mode to the fixed part, a global mode at a long length to its rounding limit.
+pub fn load_factor_tolerance(cond: f64) -> f64 {
+    1e-10 + 1e-12 * cond
+}

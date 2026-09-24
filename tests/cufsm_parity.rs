@@ -21,20 +21,12 @@
 
 mod common;
 use common::*;
-use cufsm::analysis::{assemble, constraint_basis, elemprop, msort, reduce, stripmain};
-use cufsm::dense::cholesky;
+use cufsm::analysis::{assemble, elemprop, msort, stripmain};
 use cufsm::strip::{kglocal, klocal, trans};
 use cufsm::{grosprop, stresgen, Actions};
 
 const MATRIX_TOL: f64 = 1e-12;
 const STRESS_TOL: f64 = 1e-12;
-/// Load factors: `LOAD_FACTOR_TOL` plus `COND_TOL` times the reduced `K`'s condition estimate
-/// (largest over smallest Cholesky pivot, squared). A global mode at a long length rests on a
-/// near-cancellation of membrane terms, so rounding in the assembled matrices moves it by about
-/// eps x cond(K) in any double-precision code; a local or distortional mode is well conditioned
-/// and held to the fixed part alone.
-const LOAD_FACTOR_TOL: f64 = 1e-10;
-const COND_TOL: f64 = 1e-12;
 const MAC_TOL: f64 = 1e-8;
 
 fn cases() -> Vec<serde_json::Value> {
@@ -172,19 +164,8 @@ fn load_factors_and_modes_match_cufsm() {
         let want_mode = list_of(&r["mode1"]);
         for (l, res) in got.iter().enumerate() {
             let w = &want_lf[l];
-            let (k, _) = assemble(&m, lengths[l], bc_of(&r), &msort(&m_all[l]));
-            let k = match constraint_basis(&m, msort(&m_all[l]).len()) {
-                Some(rb) => reduce(&k, &rb),
-                None => k,
-            };
-            let piv: Vec<f64> = {
-                let lf = cholesky(&k.symmetrised()).expect("K positive definite");
-                (0..lf.n).map(|j| lf.get(j, j)).collect()
-            };
-            let cond = (piv.iter().cloned().fold(0.0, f64::max)
-                / piv.iter().cloned().fold(f64::INFINITY, f64::min))
-            .powi(2);
-            let tol = LOAD_FACTOR_TOL + COND_TOL * cond;
+            let cond = cond_estimate(&m, lengths[l], bc_of(&r), &m_all[l]);
+            let tol = load_factor_tolerance(cond);
             let n = w.len().min(res.load_factors.len());
             assert!(
                 n > 0,
