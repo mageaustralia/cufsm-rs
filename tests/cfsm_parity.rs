@@ -14,7 +14,7 @@
 
 mod common;
 use common::*;
-use cufsm::cfsm::{base_column, classify, stripmain_constrained, Norm, Orth, Spaces};
+use cufsm::cfsm::{base_column, classify_with, stripmain_constrained, Norm, OSpace, Orth, Spaces};
 use cufsm::cutwp::cutwp_prop2;
 use cufsm::linalg::{solve, RMat};
 use cufsm::stripmain;
@@ -225,7 +225,7 @@ fn restricted_load_factors_match_cufsm() {
 /// CUFSM either. The doubly symmetric I-section is such a case (at 60 mm: 4 repeated pairs in L,
 /// 2 and 4 in the two halves of O), so it is held to the natural basis only, which it has
 /// uniquely (no distortional space).
-fn check_classification(orth: Orth, key: &str, skip_degenerate: bool) -> usize {
+fn check_classification(orth: Orth, ospace: OSpace, key: &str, skip_degenerate: bool) -> usize {
     let mut compared = 0;
     for r in &cfsm_cases() {
         let name = r["name"].as_str().unwrap();
@@ -241,7 +241,7 @@ fn check_classification(orth: Orth, key: &str, skip_degenerate: bool) -> usize {
         let lengths = vec_of(&r["lengths"]);
         let m_all = list_of(&r["m_all"]);
         let res = stripmain(&m, &lengths, &m_all, bc_of(r), 3).unwrap();
-        let got = classify(&m, &res, bc_of(r), orth, Norm::Vector).unwrap();
+        let got = classify_with(&m, &res, bc_of(r), orth, Norm::Vector, ospace).unwrap();
         let want = &r["cfsm"][key];
         for (l, per) in got.iter().enumerate() {
             let wrows = rows_of(&want[l]);
@@ -270,10 +270,19 @@ fn check_classification(orth: Orth, key: &str, skip_degenerate: bool) -> usize {
 
 #[test]
 fn classification_matches_cufsm() {
-    let axial = check_classification(Orth::Axial, "classification", true);
-    let natural = check_classification(Orth::Natural, "classification_natural", false);
+    let axial = check_classification(Orth::Axial, OSpace::St, "classification", true);
+    let natural = check_classification(Orth::Natural, OSpace::St, "classification_natural", false);
     assert!(
         axial > 40 && natural > 50,
         "only {axial} and {natural} compared"
     );
+    // The other O spaces, axial orthogonality (CUFSM's ospace 2, 3, 4).
+    for (os, key) in [
+        (OSpace::K, "classification_ospace2"),
+        (OSpace::Kg, "classification_ospace3"),
+        (OSpace::Vector, "classification_ospace4"),
+    ] {
+        let n = check_classification(Orth::Axial, os, key, true);
+        assert!(n > 40, "{key}: only {n}");
+    }
 }

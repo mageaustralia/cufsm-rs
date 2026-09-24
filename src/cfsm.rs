@@ -766,8 +766,21 @@ pub enum Norm {
     Work = 3,
 }
 
-/// CUFSM `base_update.m` for the ST basis (`ospace = 1`) and the uncoupled basis (`couple = 1`),
-/// CUFSM's defaults.
+/// How the other (O) modes are chosen (`GBTcon.ospace`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OSpace {
+    /// The ST basis: the natural O vectors, as built (CUFSM's default).
+    St = 1,
+    /// `K⁻¹` times the null space of G, D and L together.
+    K = 2,
+    /// `Kg⁻¹` times it.
+    Kg = 3,
+    /// The null space itself.
+    Vector = 4,
+}
+
+/// CUFSM `base_update.m` with the ST basis (`ospace = 1`) and the uncoupled basis
+/// (`couple = 1`), CUFSM's defaults. See [`base_update_with`] for the other O spaces.
 #[allow(clippy::too_many_arguments)]
 pub fn base_update(
     model: &Model,
@@ -781,12 +794,53 @@ pub fn base_update(
     orth: Orth,
     norm: Norm,
 ) -> Result<RMat, Error> {
+    base_update_with(
+        model,
+        b_v_l,
+        a,
+        bc,
+        m_a,
+        ngm,
+        ndm,
+        nlm,
+        orth,
+        norm,
+        OSpace::St,
+    )
+}
+
+/// CUFSM `base_update.m` for the uncoupled basis (`couple = 1`) with any O space. As in CUFSM,
+/// the O space other than ST is one group in the orthogonalisation, and the strain-energy and
+/// work normalisation of whole columns applies with the ST basis only.
+#[allow(clippy::too_many_arguments)]
+pub fn base_update_with(
+    model: &Model,
+    b_v_l: &RMat,
+    a: f64,
+    bc: BoundaryCondition,
+    m_a: &[f64],
+    ngm: usize,
+    ndm: usize,
+    nlm: usize,
+    orth: Orth,
+    norm: Norm,
+    ospace: OSpace,
+) -> Result<RMat, Error> {
     let nnodes = model.nodes.len();
     let ndof_m = 4 * nnodes;
     let tm = m_a.len();
+    let ngdml = ngm + ndm + nlm;
     let mut out = RMat::zeros(ndof_m * tm, ndof_m * tm);
-    let needs_k =
-        matches!(norm, Norm::StrainEnergy | Norm::Work) || matches!(orth, Orth::Axial | Orth::Load);
+    let needs_k = matches!(norm, Norm::StrainEnergy | Norm::Work)
+        || matches!(orth, Orth::Axial | Orth::Load)
+        || matches!(ospace, OSpace::K | OSpace::Kg);
+    let orthogonalise = matches!(orth, Orth::Axial | Orth::Load) || ospace != OSpace::St;
+    if orthogonalise && !needs_k {
+        // CUFSM's base_update.m reaches eig(Ksub, Kgsub) here without having built K or Kg.
+        return Err(Error::InvalidModel(
+            "cFSM: the null-space O basis with the natural basis and no energy norm needs K, which CUFSM does not build here either".into(),
+        ));
+    }
     let mut km_model = model.clone();
     if matches!(orth, Orth::Natural | Orth::Axial) {
         for n in &mut km_model.nodes {
@@ -806,14 +860,35 @@ pub fn base_update(
         } else {
             (RMat::zeros(0, 0), RMat::zeros(0, 0))
         };
-        if matches!(orth, Orth::Axial | Orth::Load) {
-            let groups = [
-                (0, ngm),
-                (ngm, ngm + ndm),
-                (ngm + ndm, ngm + ndm + nlm),
-                (ngm + ndm + nlm, ngm + ndm + nlm + nnodes - 1),
-                (ngm + ndm + nlm + nnodes - 1, ndof_m),
-            ];
+        if ospace != OSpace::St {
+            let a0 = null(&b.cols(0, ngdml).t());
+            let o = match ospace {
+                OSpace::K => solve(&k, &a0),
+                OSpace::Kg => solve(&kg, &a0),
+                _ => Some(a0),
+            }
+            .ok_or_else(|| {
+                Error::InvalidModel("cFSM: K or Kg is singular forming the O space".into())
+            })?;
+            b.put(0, ngdml, &o.cols(0, (ndof_m - ngdml).min(o.c)));
+        }
+        if orthogonalise {
+            let groups: Vec<(usize, usize)> = if ospace == OSpace::St {
+                vec![
+                    (0, ngm),
+                    (ngm, ngm + ndm),
+                    (ngm + ndm, ngdml),
+                    (ngdml, ngdml + nnodes - 1),
+                    (ngdml + nnodes - 1, ndof_m),
+                ]
+            } else {
+                vec![
+                    (0, ngm),
+                    (ngm, ngm + ndm),
+                    (ngm + ndm, ngdml),
+                    (ngdml, ndof_m),
+                ]
+            };
             for &(g0, g1) in &groups {
                 if g1 <= g0 {
                     continue;
@@ -847,7 +922,7 @@ pub fn base_update(
             }
         }
         match norm {
-            Norm::StrainEnergy | Norm::Work => {
+            Norm::StrainEnergy | Norm::Work if ospace == OSpace::St => {
                 let w = if norm == Norm::StrainEnergy { &k } else { &kg };
                 for j in 0..ndof_m {
                     let col = RMat {
@@ -868,7 +943,7 @@ pub fn base_update(
                     b.set_col(j, &scaled);
                 }
             }
-            Norm::None => {}
+            _ => {}
         }
         out.put(ndof_m * ml, ndof_m * ml, &b);
     }
@@ -1028,6 +1103,39 @@ pub fn mode_class(
     let norms = sums.map(f64::sqrt);
     let total: f64 = norms.iter().sum();
     Ok(norms.map(|v| v / total * 100.0))
+}
+
+/// [`classify`] with a chosen O space.
+pub fn classify_with(
+    model: &Model,
+    results: &[LengthResult],
+    bc: BoundaryCondition,
+    orth: Orth,
+    norm: Norm,
+    ospace: OSpace,
+) -> Result<Vec<Vec<[f64; 4]>>, Error> {
+    let ndof_m = 4 * model.nodes.len();
+    let mut out = vec![];
+    for r in results {
+        let (bvl, ngm, ndm, nlm) = base_column(model, r.length, bc, &r.m_terms)?;
+        let bv = base_update_with(
+            model, &bvl, r.length, bc, &r.m_terms, ngm, ndm, nlm, orth, norm, ospace,
+        )?;
+        let mut per = vec![];
+        for mode in &r.modes {
+            per.push(mode_class(
+                &bv,
+                mode,
+                ngm,
+                ndm,
+                nlm,
+                r.m_terms.len(),
+                ndof_m,
+            )?);
+        }
+        out.push(per);
+    }
+    Ok(out)
 }
 
 /// Classifies every mode of an analysis into G, D, L and O, CUFSM `classify.m`, with the basis

@@ -227,6 +227,7 @@ for c = 1:numel(cases)
     G2.ospace = 1; G2.couple = 1; G2.orth = 2; G2.norm = 1;
     clas = cell(numel(lengths), 1);
     clas_nat = cell(numel(lengths), 1);
+    clas_os = {[], cell(numel(lengths), 1), cell(numel(lengths), 1), cell(numel(lengths), 1)};
     for l = 1:numel(lengths)
       al = lengths(l); ma = msort({m_all{l}}){1};
       KL = sparse(zeros(4 * nn * numel(ma))); KgL = KL;
@@ -255,9 +256,21 @@ for c = 1:numel(cases)
         cln(q, :) = mode_class(bvn, real(V(:, ok(q))), ng, nd, nl, ma, 4 * nn, 1);
       end
       clas_nat{l} = cln;
+      % The other O spaces (ospace 2: K\null, 3: Kg\null, 4: the null space), axial orthogonality.
+      for os = 2:4
+        bvo = base_update(os, 1, bv, al, ma, node, elem, prop, ng, nd, nl, BC, 1, 2);
+        clo = zeros(numel(ok), 4);
+        for q = 1:numel(ok)
+          clo(q, :) = mode_class(bvo, real(V(:, ok(q))), ng, nd, nl, ma, 4 * nn, 1);
+        end
+        clas_os{os}{l} = clo;
+      end
     end
     cf.classification = clas;
     cf.classification_natural = clas_nat;
+    cf.classification_ospace2 = clas_os{2};
+    cf.classification_ospace3 = clas_os{3};
+    cf.classification_ospace4 = clas_os{4};
   end
 
   r = struct();

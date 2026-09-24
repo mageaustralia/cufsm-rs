@@ -30,8 +30,8 @@ with general boundary conditions using CUFSM: conventional and constrained finit
   springs as CUFSM does, intersecting the modal space with the constrained one. `cutwp_prop2` comes with it: shear centre, torsion and
   warping constants, and the warping function.
 
-Not yet ported: cFSM's coupled basis (`couple = 2`) and its null-space choices for the other
-modes (`ospace` 2 to 4).
+Not yet ported: cFSM's coupled basis (`couple = 2`). Its O-space choices (`ospace` 1 to 4) are
+ported for the uncoupled basis.
 
 ```rust
 use cufsm::{grosprop, stresgen, signature_ss, signature_minima, Actions, Material};
@@ -60,7 +60,7 @@ The point of a port is that it gives CUFSM's answers. Every claim below is a tes
 | **pyCUFSM**, an independent Python port | 5,900+ load factors on every fixture case it can run. | Within its own noise (below). |
 | **Theory**, no oracle (`tests/theory.rs`) | A simply supported plate at k = 4 with its minimum at a square half-wave; an outstand at k = 0.425 + (b/a)²; a long I-section at the Euler load, converging with the mesh; every eigenpair satisfying K φ = λ Kg φ to round-off; invariance to E, stress scale, mirroring, renumbering and translation; convergence from above under mesh refinement; springs that only stiffen, and a stiff one that approaches a fixed DOF. | All hold. |
 | **CUFSM's template** | Every node of 14 template cases. | To 1e-12. |
-| **CUFSM's cFSM** (`analysis/cFSM/`, under Octave) | Six sections: sharp and rounded lipped C, lipped Z, plain channel, hat, branched I-section, and a lipped C with a fixity, a constraint and springs. `cutwp_prop2`'s properties and warping function; the sizes of the four spaces and the spaces themselves; load factors restricted to G, D or L alone; the classification of every distinct mode, with CUFSM's defaults and with the natural basis. | Properties to 1e-10, spaces to 1e-8, restricted load factors to rounding, classifications to 1e-6 percentage points. |
+| **CUFSM's cFSM** (`analysis/cFSM/`, under Octave) | Six sections: sharp and rounded lipped C, lipped Z, plain channel, hat, branched I-section, and a lipped C with a fixity, a constraint and springs. `cutwp_prop2`'s properties and warping function; the sizes of the four spaces and the spaces themselves; load factors restricted to G, D or L alone; the classification of every distinct mode, with CUFSM's defaults, with the natural basis, and with each of the other O spaces. | Properties to 1e-10, spaces to 1e-8, restricted load factors to rounding, classifications to 1e-6 percentage points. |
 
 ### Accuracy, honestly
 
