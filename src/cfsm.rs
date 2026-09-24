@@ -950,6 +950,190 @@ pub fn base_update_with(
     Ok(out)
 }
 
+/// CUFSM `base_update.m` for the coupled basis (`couple = 2`): each space orthogonalised across
+/// all the longitudinal terms together, for the general end conditions.
+///
+/// Two things are as CUFSM has them. This branch of `base_update.m` numbers the O-space choices
+/// one higher than the uncoupled branch: its `ospace` 3, 4 and 5 are `K⁻¹`, `Kg⁻¹` and the null
+/// space, and its `ospace` 2 leaves the natural O vectors. `ospace_code` takes those numbers. And
+/// with the natural basis and the ST O space it fills in no vectors at all (the basis stays zero),
+/// so that combination is refused.
+#[allow(clippy::too_many_arguments)]
+pub fn base_update_coupled(
+    model: &Model,
+    b_v_l: &RMat,
+    a: f64,
+    bc: BoundaryCondition,
+    m_a: &[f64],
+    ngm: usize,
+    ndm: usize,
+    nlm: usize,
+    orth: Orth,
+    norm: Norm,
+    ospace_code: u8,
+) -> Result<RMat, Error> {
+    let nnodes = model.nodes.len();
+    let ndof_m = 4 * nnodes;
+    let tm = m_a.len();
+    let ngdml = ngm + ndm + nlm;
+    let nom = ndof_m - ngdml;
+    let orthogonalise = matches!(orth, Orth::Axial | Orth::Load) || (2..=4).contains(&ospace_code);
+    if !orthogonalise {
+        return Err(Error::InvalidModel(
+            "cFSM: the coupled basis with the natural basis and the ST O space is left empty by CUFSM's base_update.m".into(),
+        ));
+    }
+    let needs_k = matches!(norm, Norm::StrainEnergy | Norm::Work)
+        || matches!(orth, Orth::Axial | Orth::Load)
+        || ospace_code == 2
+        || ospace_code == 3;
+    if !needs_k {
+        return Err(Error::InvalidModel(
+            "cFSM: this combination reaches eig(Ksub, Kgsub) without K in CUFSM too".into(),
+        ));
+    }
+    let mut km_model = model.clone();
+    if matches!(orth, Orth::Natural | Orth::Axial) {
+        for n in &mut km_model.nodes {
+            n.stress = 1.0;
+        }
+    }
+    let (k, kg) = assemble_strips(&km_model, a, bc, m_a);
+    let (k, kg) = (RMat::from_square(&k), RMat::from_square(&kg));
+    let ntot = ndof_m * tm;
+    // The spaces' columns gathered across the terms, term by term.
+    let gather = |c0: usize, c1: usize| -> RMat {
+        let mut o = RMat::zeros(ntot, (c1 - c0) * tm);
+        for ml in 0..tm {
+            for (jj, j) in (c0..c1).enumerate() {
+                o.set_col(ml * (c1 - c0) + jj, &b_v_l.col(ndof_m * ml + j));
+            }
+        }
+        o
+    };
+    let groups = [
+        (0, ngm),
+        (ngm, ngm + ndm),
+        (ngm + ndm, ngdml),
+        (ngdml, ndof_m),
+    ];
+    let mut spaces: Vec<RMat> = groups.iter().map(|&(g0, g1)| gather(g0, g1)).collect();
+    if (3..=5).contains(&ospace_code) {
+        let gdl = gather(0, ngdml);
+        let a0 = null(&gdl.t());
+        spaces[3] = match ospace_code {
+            3 => solve(&k, &a0),
+            4 => solve(&kg, &a0),
+            _ => Some(a0),
+        }
+        .ok_or_else(|| {
+            Error::InvalidModel("cFSM: K or Kg is singular forming the O space".into())
+        })?;
+    }
+    let mut out = RMat::zeros(ntot, ntot);
+    for (isub, &(g0, g1)) in groups.iter().enumerate() {
+        if g1 <= g0 {
+            continue;
+        }
+        let sub = &spaces[isub];
+        let ksub = sub.t().mul(&k).mul(sub);
+        let kgsub = sub.t().mul(&kg).mul(sub);
+        let (_, mut v) = eig_sym_def(&ksub, &kgsub).ok_or_else(|| {
+            Error::InvalidModel(format!(
+                "cFSM: Kg on coupled space {} is not positive definite",
+                isub + 1
+            ))
+        })?;
+        if matches!(norm, Norm::StrainEnergy | Norm::Work) {
+            let w = if norm == Norm::StrainEnergy {
+                &ksub
+            } else {
+                &kgsub
+            };
+            let s = v.t().mul(w).mul(&v);
+            for j in 0..v.c {
+                let f = s.get(j, j).sqrt();
+                for i in 0..v.r {
+                    let x = v.get(i, j) / f;
+                    v.set(i, j, x);
+                }
+            }
+        }
+        let orthd = sub.mul(&v);
+        let width = g1 - g0;
+        for ml in 0..tm {
+            for jj in 0..width {
+                if ml * width + jj < orthd.c {
+                    out.set_col(ndof_m * ml + g0 + jj, &orthd.col(ml * width + jj));
+                }
+            }
+        }
+    }
+    let _ = nom;
+    match norm {
+        Norm::StrainEnergy | Norm::Work if ospace_code == 1 => {
+            let w = if norm == Norm::StrainEnergy { &k } else { &kg };
+            for j in 0..ntot {
+                let col = RMat {
+                    r: ntot,
+                    c: 1,
+                    data: out.col(j),
+                };
+                let f = col.t().mul(w).mul(&col).get(0, 0).sqrt();
+                let scaled: Vec<f64> = col.data.iter().map(|v| v / f).collect();
+                out.set_col(j, &scaled);
+            }
+        }
+        Norm::Vector => {
+            for j in 0..ntot {
+                let col = out.col(j);
+                let f = col.iter().map(|v| v * v).sum::<f64>().sqrt();
+                let scaled: Vec<f64> = col.iter().map(|v| v / f).collect();
+                out.set_col(j, &scaled);
+            }
+        }
+        _ => {}
+    }
+    Ok(out)
+}
+
+/// A mode's participation in the four spaces with the coupled basis, CUFSM `mode_class.m`
+/// (`couple = 2`): the whole mode resolved on the whole basis at once.
+pub fn mode_class_coupled(
+    b_v: &RMat,
+    displ: &[f64],
+    ngm: usize,
+    ndm: usize,
+    nlm: usize,
+    tm: usize,
+    ndof_m: usize,
+) -> Result<[f64; 4], Error> {
+    let d = RMat {
+        r: displ.len(),
+        c: 1,
+        data: displ.to_vec(),
+    };
+    let clas = solve(b_v, &d)
+        .ok_or_else(|| Error::InvalidModel("cFSM: the coupled base vectors are singular".into()))?;
+    let groups = [
+        (0, ngm),
+        (ngm, ngm + ndm),
+        (ngm + ndm, ngm + ndm + nlm),
+        (ngm + ndm + nlm, ndof_m),
+    ];
+    let mut sums = [0.0; 4];
+    for j in 0..tm {
+        for (g, &(g0, g1)) in groups.iter().enumerate() {
+            for i in g0..g1 {
+                sums[g] += clas.get(j * ndof_m + i, 0).powi(2);
+            }
+        }
+    }
+    let norms = sums.map(f64::sqrt);
+    let total: f64 = norms.iter().sum();
+    Ok(norms.map(|v| v / total * 100.0))
+}
+
 /// Which modal spaces to keep (`GBTcon.glob`, `.dist`, `.local`, `.other`, each whole).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Spaces {

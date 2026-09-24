@@ -30,8 +30,9 @@ with general boundary conditions using CUFSM: conventional and constrained finit
   springs as CUFSM does, intersecting the modal space with the constrained one. `cutwp_prop2` comes with it: shear centre, torsion and
   warping constants, and the warping function.
 
-Not yet ported: cFSM's coupled basis (`couple = 2`). Its O-space choices (`ospace` 1 to 4) are
-ported for the uncoupled basis.
+cFSM's uncoupled basis (`couple = 1`, CUFSM's default) takes every O-space choice (`ospace` 1
+to 4); the coupled basis (`couple = 2`, for several longitudinal terms) is ported as CUFSM's
+`base_update.m` has it, including that branch's own numbering of the O-space choices.
 
 ```rust
 use cufsm::{grosprop, stresgen, signature_ss, signature_minima, Actions, Material};
@@ -97,7 +98,12 @@ and no more.
   channel, which has none). Here that is simply no load factors.
 - On a doubly symmetric section, cFSM's axial orthogonalisation meets repeated eigenvalues, so
   its modal basis, and the vector-normalised classification with it, is not unique in CUFSM
-  either. The natural basis is, and that is what such a section is compared on.
+  either. The natural basis is, and that is what such a section is compared on. The coupled G
+  space of a clamped channel meets exact repeats too. How a mode splits among the spaces is
+  still unique, so there the D : L : O proportions are compared, to 1e-8.
+- The coupled branch of `base_update.m` numbers its O-space choices one higher than the
+  uncoupled branch (3, 4, 5 for `K⁻¹`, `Kg⁻¹`, null space). With the natural basis and the ST
+  O space it fills in no vectors, so that combination is refused here.
 - Four of the DSM Design Guide files carry a saved curve that is not their saved model's:
   today's CUFSM, run on each file's own model, gives this crate's values, not the file's
   (`cwlip_modified.mat`: 1.62269 at 1.07 in, where the file says 83.33653). They are named in

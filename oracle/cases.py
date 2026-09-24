@@ -164,5 +164,12 @@ c_fix["fix"] = [[6, 7]]
 c_fix["constraints"] = [[1, 2, 1.0, 11, 2]]
 c_fix["springs"] = springs_a
 cases.append(c_fix)
+# cFSM with several longitudinal terms (clamped ends), including the coupled basis (couple 2).
+c_cc = cf("cfsm lipped-c C-C coupled", small)
+c_cc["bc"] = "C-C"
+c_cc["lengths"] = [600.0, 2500.0]
+c_cc["m_all"] = [[1, 2, 3]] * 2
+c_cc["coupled"] = True
+cases.append(c_cc)
 
 print(json.dumps(cases, indent=1))

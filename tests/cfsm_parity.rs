@@ -14,7 +14,10 @@
 
 mod common;
 use common::*;
-use cufsm::cfsm::{base_column, classify_with, stripmain_constrained, Norm, OSpace, Orth, Spaces};
+use cufsm::cfsm::{
+    base_column, base_update_coupled, classify_with, mode_class_coupled, stripmain_constrained,
+    Norm, OSpace, Orth, Spaces,
+};
 use cufsm::cutwp::cutwp_prop2;
 use cufsm::linalg::{solve, RMat};
 use cufsm::stripmain;
@@ -108,7 +111,8 @@ fn modal_spaces_match_cufsm() {
         let m = model_of(r);
         let a = vec_of(&r["lengths"])[0];
         let cf = &r["cfsm"];
-        let (bv, ngm, ndm, nlm) = base_column(&m, a, bc_of(r), &[1.0]).unwrap();
+        let terms = cufsm::analysis::msort(&list_of(&r["m_all"])[0]);
+        let (bv, ngm, ndm, nlm) = base_column(&m, a, bc_of(r), &terms).unwrap();
         let want = (
             cf["ngm"].as_u64().unwrap() as usize,
             cf["ndm"].as_u64().unwrap() as usize,
@@ -285,4 +289,81 @@ fn classification_matches_cufsm() {
         let n = check_classification(Orth::Axial, os, key, true);
         assert!(n > 40, "{key}: only {n}");
     }
+}
+
+/// The coupled basis (`couple = 2`) on a clamped channel with three longitudinal terms: axial
+/// orthogonality, vector norm, and that branch's `ospace` 2 (the natural O vectors).
+///
+/// The coupled G space's orthogonalisation meets exactly repeated eigenvalues here (a relative
+/// gap of 2e-16), so its vectors - and the length of a mode's G coefficients on them - are not
+/// unique, in CUFSM either. How a mode splits among the spaces is unique, and so is the length of
+/// its D, L and O coefficients; what is compared is therefore the D : L : O proportions, which
+/// agree to 1e-8, with the G share shown for information.
+#[test]
+fn coupled_classification_matches_cufsm() {
+    let mut compared = 0;
+    for r in cfsm_cases()
+        .iter()
+        .filter(|r| !r["cfsm"]["classification_coupled"].is_null())
+    {
+        let name = r["name"].as_str().unwrap();
+        let m = model_of(r);
+        let lengths = vec_of(&r["lengths"]);
+        let m_all = list_of(&r["m_all"]);
+        let res = stripmain(&m, &lengths, &m_all, bc_of(r), 3).unwrap();
+        let want = &r["cfsm"]["classification_coupled"];
+        for (l, rl) in res.iter().enumerate() {
+            let (bvl, ngm, ndm, nlm) = base_column(&m, rl.length, bc_of(r), &rl.m_terms).unwrap();
+            let bv = base_update_coupled(
+                &m,
+                &bvl,
+                rl.length,
+                bc_of(r),
+                &rl.m_terms,
+                ngm,
+                ndm,
+                nlm,
+                Orth::Axial,
+                Norm::Vector,
+                2,
+            )
+            .unwrap();
+            let wrows = rows_of(&want[l]);
+            let lfs = &rl.load_factors;
+            for (q, (mode, w)) in rl.modes.iter().zip(&wrows).enumerate() {
+                let distinct = (q == 0 || (lfs[q] / lfs[q - 1] - 1.0).abs() > 1e-6)
+                    && (q + 1 >= lfs.len() || (lfs[q + 1] / lfs[q] - 1.0).abs() > 1e-6);
+                if !distinct {
+                    continue;
+                }
+                let g = mode_class_coupled(
+                    &bv,
+                    mode,
+                    ngm,
+                    ndm,
+                    nlm,
+                    rl.m_terms.len(),
+                    4 * m.nodes.len(),
+                )
+                .unwrap();
+                let dlo = |c: &[f64]| {
+                    let t = c[1] + c[2] + c[3];
+                    [c[1] / t, c[2] / t, c[3] / t]
+                };
+                let (gd, wd) = (dlo(&g), dlo(w));
+                for k in 0..3 {
+                    assert!(
+                        (gd[k] - wd[k]).abs() < 1e-8,
+                        "{name} length {} mode {}: D:L:O {gd:?} vs CUFSM {wd:?} (G {} vs {})",
+                        lengths[l],
+                        q + 1,
+                        g[0],
+                        w[0]
+                    );
+                }
+                compared += 1;
+            }
+        }
+    }
+    assert!(compared >= 4, "only {compared}");
 }

@@ -227,6 +227,7 @@ for c = 1:numel(cases)
     G2.ospace = 1; G2.couple = 1; G2.orth = 2; G2.norm = 1;
     clas = cell(numel(lengths), 1);
     clas_nat = cell(numel(lengths), 1);
+    clas_c2 = cell(numel(lengths), 1);
     clas_os = {[], cell(numel(lengths), 1), cell(numel(lengths), 1), cell(numel(lengths), 1)};
     for l = 1:numel(lengths)
       al = lengths(l); ma = msort({m_all{l}}){1};
@@ -265,12 +266,22 @@ for c = 1:numel(cases)
         end
         clas_os{os}{l} = clo;
       end
+      % The coupled basis (couple 2), axial orthogonality, this branch's ospace 2 (the natural O).
+      if isfield(cs, 'coupled') && cs.coupled
+        bvc = base_update(2, 1, bv, al, ma, node, elem, prop, ng, nd, nl, BC, 2, 2);
+        clc = zeros(numel(ok), 4);
+        for q = 1:numel(ok)
+          clc(q, :) = mode_class(bvc, real(V(:, ok(q))), ng, nd, nl, ma, 4 * nn, 2);
+        end
+        clas_c2{l} = clc;
+      end
     end
     cf.classification = clas;
     cf.classification_natural = clas_nat;
     cf.classification_ospace2 = clas_os{2};
     cf.classification_ospace3 = clas_os{3};
     cf.classification_ospace4 = clas_os{4};
+    if isfield(cs, 'coupled') && cs.coupled, cf.classification_coupled = clas_c2; end
   end
 
   r = struct();
