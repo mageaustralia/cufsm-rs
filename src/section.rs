@@ -175,6 +175,7 @@ mod tests {
                 },
             ],
             constraints: vec![],
+            springs: vec![],
         };
         let p = grosprop(&m);
         assert!((p.a - 200.0).abs() < 1e-12);

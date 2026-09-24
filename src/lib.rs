@@ -21,7 +21,7 @@
 //!     })
 //!     .collect();
 //! let elements = (0..10).map(|i| Element { ni: i, nj: i + 1, t: 2.0, mat: 0 }).collect();
-//! let model = Model { materials: vec![Material::isotropic(200e3, 0.3)], nodes, elements, constraints: vec![] };
+//! let model = Model { materials: vec![Material::isotropic(200e3, 0.3)], nodes, elements, constraints: vec![], springs: vec![] };
 //! let r = stripmain(&model, &[100.0], &[vec![1.0]], BoundaryCondition::SS, 1).unwrap();
 //! // Plate buckling at a square half-wave: k = 4, sigma = 4 pi² E / (12 (1 - nu²)) (t / b)².
 //! let k4 = 4.0 * std::f64::consts::PI.powi(2) * 200e3 / (12.0 * (1.0 - 0.09)) * (2.0f64 / 100.0).powi(2);
@@ -41,7 +41,7 @@ pub mod strip;
 pub mod template;
 
 pub use analysis::{signature_minima, signature_ss, stripmain, LengthResult, Minimum};
-pub use model::{BoundaryCondition, Constraint, Dof, Element, Material, Model, Node};
+pub use model::{BoundaryCondition, Constraint, Dof, Element, Material, Model, Node, Spring};
 pub use section::{grosprop, stresgen, Actions, GrossProperties};
 pub use template::{templatecalc, Shape, Template};
 

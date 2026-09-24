@@ -157,6 +157,51 @@ pub fn bc_i1_5(bc: BoundaryCondition, kk: f64, nn: f64, a: f64) -> [f64; 5] {
     }
 }
 
+/// The longitudinal shape function of term `m` at `ys`, CUFSM `Ym_at_ys.m`.
+pub fn ym_at_ys(bc: BoundaryCondition, m: f64, ys: f64, a: f64) -> f64 {
+    let x = PI * ys / a;
+    match bc {
+        BoundaryCondition::SS => (m * x).sin(),
+        BoundaryCondition::CC => (m * x).sin() * x.sin(),
+        BoundaryCondition::SC => ((m + 1.0) * x).sin() + (m + 1.0) / m * (m * x).sin(),
+        BoundaryCondition::CF => 1.0 - ((m - 0.5) * x).cos(),
+        BoundaryCondition::CG => ((m - 0.5) * x).sin() * (x / 2.0).sin(),
+    }
+}
+
+/// Its first derivative along the member, CUFSM `Ymprime_at_ys.m`.
+pub fn ymprime_at_ys(bc: BoundaryCondition, m: f64, ys: f64, a: f64) -> f64 {
+    match bc {
+        BoundaryCondition::SS => (PI * m * ((PI * m * ys) / a).cos()) / a,
+        BoundaryCondition::CC => {
+            (PI * ((PI * ys) / a).cos() * ((PI * m * ys) / a).sin()) / a
+                + (PI * m * ((PI * ys) / a).sin() * ((PI * m * ys) / a).cos()) / a
+        }
+        BoundaryCondition::SC => {
+            (PI * ((PI * ys * (m + 1.0)) / a).cos() * (m + 1.0)) / a
+                + (PI * ((PI * m * ys) / a).cos() * (m + 1.0)) / a
+        }
+        BoundaryCondition::CF => (PI * ((PI * ys * (m - 0.5)) / a).sin() * (m - 0.5)) / a,
+        BoundaryCondition::CG => {
+            (PI * ((PI * ys * (m - 0.5)) / a).sin() * ((PI * ys) / (2.0 * a)).cos()) / (2.0 * a)
+                + (PI
+                    * ((PI * ys * (m - 0.5)) / a).cos()
+                    * ((PI * ys) / (2.0 * a)).sin()
+                    * (m - 0.5))
+                    / a
+        }
+    }
+}
+
+/// `[I1, I5]` for a discrete spring at `ys`, CUFSM `BC_I1_5_atpoint.m`: the products of the two
+/// terms' shape functions, and of their derivatives, there.
+pub fn bc_i1_5_atpoint(bc: BoundaryCondition, kk: f64, nn: f64, a: f64, ys: f64) -> [f64; 2] {
+    [
+        ym_at_ys(bc, kk, ys, a) * ym_at_ys(bc, nn, ys, a),
+        ymprime_at_ys(bc, kk, ys, a) * ymprime_at_ys(bc, nn, ys, a),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

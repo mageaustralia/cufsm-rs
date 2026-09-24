@@ -21,7 +21,7 @@
 
 mod common;
 use common::*;
-use cufsm::analysis::{assemble, elemprop, msort, stripmain};
+use cufsm::analysis::{assemble_strips, elemprop, msort, stripmain};
 use cufsm::strip::{kglocal, klocal, trans};
 use cufsm::{grosprop, stresgen, Actions};
 
@@ -130,7 +130,8 @@ fn global_matrices_match_cufsm() {
         let m = model_of(&r);
         let a = vec_of(&r["lengths"])[0];
         let m_a = msort(&list_of(&r["m_all"])[0]);
-        let (k, kg) = assemble(&m, a, bc_of(&r), &m_a);
+        // The oracle's K and Kg are the strips' alone (stripmain.m adds springs after).
+        let (k, kg) = assemble_strips(&m, a, bc_of(&r), &m_a);
         let dk = rel_diff(&k, &rows_of(&r["K"]));
         let dkg = rel_diff(&kg, &rows_of(&r["Kg"]));
         assert!(

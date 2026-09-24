@@ -117,4 +117,16 @@ cases.append(signature("outside-dims lipped-c compression", {"template": out_c},
 cases.append(signature("outside-dims lipped-z compression", {"template": out_z}, actions(P=1000.0), n_lengths=20))
 cases.append(signature("outside-dims plain channel compression", {"template": out_p}, actions(P=1000.0), n_lengths=20))
 
+# Springs (CUFSM v4.3 form: [# nodei nodej ku kv kw kq local discrete ys]; nodej 0 = ground).
+# A foundation spring holding a lip tip, a discrete spring at mid-length restraining the other lip,
+# a global spring and a local one between the two lip tips, on the small lipped C, under S-S and
+# under C-C with several terms.
+springs_a = [[1, 1, 0, 0, 0, 5.0, 0, 0, 0, 0],
+             [2, 11, 0, 0, 0, 50.0, 0, 0, 1, 0.5]]
+springs_b = [[1, 1, 11, 2.0, 0, 3.0, 0, 1, 0, 0],
+             [2, 1, 11, 0, 0, 1.0, 500.0, 0, 0, 0]]
+cases.append(signature("lipped-c grounded springs", small, actions(P=1000.0), n_lengths=20, springs=springs_a))
+cases.append(signature("lipped-c node springs", small, actions(P=1000.0), n_lengths=20, springs=springs_b))
+cases.append(general("lipped-c C-C springs", small, actions(P=1000.0), "C-C", [600.0, 2500.0], 6, springs=springs_a + springs_b[:1]))
+
 print(json.dumps(cases, indent=1))

@@ -54,6 +54,7 @@ fn load_factors_match_matlab_cufsm() {
             nodes,
             elements,
             constraints: vec![],
+            springs: vec![],
         };
         let lengths = vec_of(&c["lengths"]);
         let m_all = vec![vec![1.0]; lengths.len()];

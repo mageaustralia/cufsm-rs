@@ -37,6 +37,7 @@ fn polyline(points: &[(f64, f64)], t: f64, sub: usize) -> Model {
         nodes,
         elements,
         constraints: vec![],
+        springs: vec![],
     }
 }
 
@@ -123,6 +124,7 @@ fn i_section(nf: usize) -> Model {
         nodes,
         elements,
         constraints: vec![],
+        springs: vec![],
     }
 }
 
@@ -367,6 +369,59 @@ fn signature_minima_of_a_lipped_channel() {
             mn.load_factor > 0.95 * at.load_factors[0],
             "{mn:?} far below the sample at {}",
             at.length
+        );
+    }
+}
+
+/// Springs stiffen: every load factor with a spring added is at least the one without, and a
+/// stiff enough foundation spring on a node's out-of-plane DOF approaches fixing that DOF.
+#[test]
+fn springs_stiffen_and_a_stiff_one_approaches_a_fixed_dof() {
+    use cufsm::Spring;
+    let pts = [
+        (60.0, 15.0),
+        (60.0, 0.0),
+        (0.0, 0.0),
+        (0.0, 150.0),
+        (60.0, 150.0),
+        (60.0, 135.0),
+    ];
+    let base = loaded(
+        polyline(&pts, 1.5, 3),
+        Actions {
+            p: 1.0,
+            ..Default::default()
+        },
+    );
+    let web_mid = 9; // the node halfway up the web
+    let spring = |kw: f64| Spring {
+        ni: web_mid,
+        nj: None,
+        ku: kw,
+        kv: 0.0,
+        kw: 0.0,
+        kq: 0.0,
+        local: false,
+        discrete: false,
+        ys_fraction: 0.0,
+    };
+    let lengths = [100.0, 400.0, 1500.0];
+    for a in lengths {
+        let free = lowest(&base, a);
+        let mut soft = base.clone();
+        soft.springs.push(spring(1.0));
+        let mut stiff = base.clone();
+        stiff.springs.push(spring(1e8));
+        let mut fixed = base.clone();
+        fixed.nodes[web_mid].free[0] = false; // u, the web's out-of-plane DOF here
+        let (s, k, f) = (lowest(&soft, a), lowest(&stiff, a), lowest(&fixed, a));
+        assert!(
+            s >= free * (1.0 - 1e-12) && k >= s * (1.0 - 1e-12),
+            "a = {a}: {free} {s} {k}"
+        );
+        assert!(
+            (k / f - 1.0).abs() < 1e-4,
+            "a = {a}: stiff spring {k} vs fixed {f}"
         );
     }
 }

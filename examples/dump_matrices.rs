@@ -70,6 +70,7 @@ fn main() {
             nodes,
             elements,
             constraints: vec![],
+            springs: vec![],
         }
     } else {
         let all: Vec<Value> = serde_json::from_str(
@@ -105,6 +106,7 @@ fn main() {
             nodes,
             elements,
             constraints: vec![],
+            springs: vec![],
         }
     };
     let (k, kg) = assemble(&m, a, BoundaryCondition::SS, &[1.0]);

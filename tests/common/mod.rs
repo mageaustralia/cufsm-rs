@@ -1,7 +1,7 @@
 //! Reading reference fixtures written by `oracle/` into the crate's own types.
 #![allow(dead_code)]
 
-use cufsm::{BoundaryCondition, Constraint, Dof, Element, Material, Model, Node};
+use cufsm::{BoundaryCondition, Constraint, Dof, Element, Material, Model, Node, Spring};
 use serde_json::Value;
 
 pub fn load(path: &str) -> Vec<Value> {
@@ -87,11 +87,34 @@ pub fn model_of(r: &Value) -> Model {
             })
             .collect(),
     };
+    // CUFSM's v4.3 springs: [# nodei nodej ku kv kw kq local discrete ys], nodej 0 = ground.
+    let springs = match &r["springs"] {
+        Value::Array(a) if !a.is_empty() => rows_of(&r["springs"])
+            .into_iter()
+            .map(|sp| Spring {
+                ni: sp[1] as usize - 1,
+                nj: if sp[2] == 0.0 {
+                    None
+                } else {
+                    Some(sp[2] as usize - 1)
+                },
+                ku: sp[3],
+                kv: sp[4],
+                kw: sp[5],
+                kq: sp[6],
+                local: sp[7] != 0.0,
+                discrete: sp[8] != 0.0,
+                ys_fraction: sp[9],
+            })
+            .collect(),
+        _ => vec![],
+    };
     Model {
         materials: vec![Material::isotropic(e, nu)],
         nodes,
         elements,
         constraints,
+        springs,
     }
 }
 

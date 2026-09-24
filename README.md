@@ -16,13 +16,14 @@ with general boundary conditions using CUFSM: conventional and constrained finit
 
 - Strip elastic and geometric stiffness, for all five end conditions CUFSM offers
   (S-S, C-C, S-C, C-F, C-G) and any set of longitudinal terms.
-- Fixed nodal DOFs and master-slave constraints.
+- Fixed nodal DOFs, master-slave constraints, and springs (foundation or discrete, to ground or
+  between nodes, CUFSM's v4.3 form).
 - Gross section properties and reference stresses from P, Mxx, Mzz, M11, M22.
 - The signature curve, and its local minima (the inputs to the Direct Strength Method).
 - CUFSM's C and Z template, lipped or plain, sharp or with rounded corners, from centreline
   dimensions or from outside dimensions and inside radii.
 
-Not yet ported: springs, and cFSM (the constrained finite strip modal decomposition that labels
+Not yet ported: cFSM (the constrained finite strip modal decomposition that labels
 modes as local, distortional or global).
 
 ```rust
@@ -46,10 +47,10 @@ The point of a port is that it gives CUFSM's answers. Every claim below is a tes
 
 | Reference | What is compared | Result |
 |---|---|---|
-| **CUFSM itself**, its MATLAB source run unmodified under GNU Octave (`oracle/`) | 25 cases: lipped, rounded, unequal and plain channels, Z in four loadings, hat, angle, plate, outside-dimension templates; all five end conditions with up to 8 terms; fixities and constraints. Stage by stage: section properties, stresses, each strip's local and global matrices, the assembled `K` and `Kg`, then the load factors and first modes. | Matrices, properties and stresses to 1e-12. 6,000+ load factors and 350+ mode shapes (MAC to 1 - 1e-8). |
+| **CUFSM itself**, its MATLAB source run unmodified under GNU Octave (`oracle/`) | 28 cases: lipped, rounded, unequal and plain channels, Z in four loadings, hat, angle, plate, outside-dimension templates; all five end conditions with up to 8 terms; fixities, constraints and springs. Stage by stage: section properties, stresses, each strip's local and global matrices, the assembled `K` and `Kg`, then the load factors and first modes. | Matrices, properties and stresses to 1e-12. 7,000+ load factors and 450+ mode shapes (MAC to 1 - 1e-8). |
 | **MATLAB CUFSM** v5.66, compiled, under the MATLAB R2025b Runtime (from the CufsmSharp project) | 1,480 load factors, a lipped channel with 2.5 mm corner radii, compression and bending. | Local modes to 1e-14 - 1e-12. |
-| **pyCUFSM**, an independent Python port | 5,400+ load factors on every fixture case it can run. | Within its own noise (below). |
-| **Theory**, no oracle (`tests/theory.rs`) | A simply supported plate at k = 4 with its minimum at a square half-wave; an outstand at k = 0.425 + (b/a)²; a long I-section at the Euler load, converging with the mesh; every eigenpair satisfying K φ = λ Kg φ to round-off; invariance to E, stress scale, mirroring, renumbering and translation; convergence from above under mesh refinement. | All hold. |
+| **pyCUFSM**, an independent Python port | 5,900+ load factors on every fixture case it can run. | Within its own noise (below). |
+| **Theory**, no oracle (`tests/theory.rs`) | A simply supported plate at k = 4 with its minimum at a square half-wave; an outstand at k = 0.425 + (b/a)²; a long I-section at the Euler load, converging with the mesh; every eigenpair satisfying K φ = λ Kg φ to round-off; invariance to E, stress scale, mirroring, renumbering and translation; convergence from above under mesh refinement; springs that only stiffen, and a stiff one that approaches a fixed DOF. | All hold. |
 | **CUFSM's template** | Every node of 14 template cases. | To 1e-12. |
 
 ### Accuracy, honestly

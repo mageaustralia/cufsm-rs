@@ -84,6 +84,26 @@ pub struct Constraint {
     pub dof_k: Dof,
 }
 
+/// A spring, CUFSM's `springs` row `[# nodei nodej ku kv kw kq local discrete ys]`
+/// (the v4.3 form).
+///
+/// `nj: None` springs node `ni` to ground. A foundation spring (`discrete: false`) is a stiffness
+/// per unit length along the member; a discrete one acts at `ys_fraction` of the length.
+/// `local` orients a spring between two nodes along the line joining them; otherwise, and always
+/// for a spring to ground or between coincident nodes, `ku` acts along global x and `kw` along z.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Spring {
+    pub ni: usize,
+    pub nj: Option<usize>,
+    pub ku: f64,
+    pub kv: f64,
+    pub kw: f64,
+    pub kq: f64,
+    pub local: bool,
+    pub discrete: bool,
+    pub ys_fraction: f64,
+}
+
 /// A complete section model.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Model {
@@ -91,6 +111,7 @@ pub struct Model {
     pub nodes: Vec<Node>,
     pub elements: Vec<Element>,
     pub constraints: Vec<Constraint>,
+    pub springs: Vec<Spring>,
 }
 
 impl Model {
@@ -126,6 +147,13 @@ impl Model {
             let (a, b) = (&self.nodes[e.ni], &self.nodes[e.nj]);
             if (b.x - a.x).hypot(b.z - a.z) <= 0.0 {
                 return Err(Bad(format!("element {i} has zero width")));
+            }
+        }
+        for (i, sp) in self.springs.iter().enumerate() {
+            if sp.ni >= n || sp.nj.is_some_and(|j| j >= n) {
+                return Err(Bad(format!(
+                    "spring {i} refers to a node that does not exist"
+                )));
             }
         }
         for (i, c) in self.constraints.iter().enumerate() {

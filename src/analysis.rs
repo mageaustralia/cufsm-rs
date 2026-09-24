@@ -20,7 +20,7 @@
 
 use crate::dense::{backward_t, cholesky, forward, sym_eigen, Mat};
 use crate::model::{BoundaryCondition, Dof, Model};
-use crate::strip::{kglocal, klocal, trans};
+use crate::strip::{kglocal, klocal, spring_klocal, trans};
 use crate::Error;
 
 /// The result at one length.
@@ -76,8 +76,66 @@ fn gdof(l: usize, m: usize, ni: usize, nj: usize, nnodes: usize) -> usize {
     }
 }
 
-/// Assembles the global `K` and `Kg` at length `a`.
+/// Assembles the global `K` and `Kg` at length `a`, springs included (CUFSM `stripmain.m` adds
+/// them to `K` after the strips, through `spring_klocal`, `spring_trans` and `spring_assemble`).
 pub fn assemble(model: &Model, a: f64, bc: BoundaryCondition, m_a: &[f64]) -> (Mat, Mat) {
+    let (mut k, kg) = assemble_strips(model, a, bc, m_a);
+    add_springs(model, &mut k, a, bc, m_a);
+    (k, kg)
+}
+
+/// A spring's contribution to `K`, CUFSM `stripmain.m` (the v4.3 springs) and `spring_assemble.m`.
+/// A spring to ground contributes only its first node's DOFs.
+pub fn add_springs(model: &Model, k: &mut Mat, a: f64, bc: BoundaryCondition, m_a: &[f64]) {
+    let nnodes = model.nodes.len();
+    let tm = m_a.len();
+    for sp in &model.springs {
+        let ks_l = spring_klocal(
+            sp.ku,
+            sp.kv,
+            sp.kw,
+            sp.kq,
+            a,
+            bc,
+            m_a,
+            sp.discrete,
+            sp.ys_fraction * a,
+        );
+        let alpha = match sp.nj {
+            None => 0.0,
+            Some(j) => {
+                let (ni, nj) = (&model.nodes[sp.ni], &model.nodes[j]);
+                let (dx, dz) = (nj.x - ni.x, nj.z - ni.z);
+                if dx.hypot(dz) < 1e-10 || !sp.local {
+                    0.0
+                } else {
+                    dz.atan2(dx)
+                }
+            }
+        };
+        let ks = trans(alpha, &ks_l);
+        // To ground, the second node's DOFs (local 2, 3, 6, 7) have nowhere to go.
+        let live = |l: usize| sp.nj.is_some() || matches!(l, 0 | 1 | 4 | 5);
+        let nj = sp.nj.unwrap_or(sp.ni);
+        for m in 0..tm {
+            for p in 0..tm {
+                for r in (0..8).filter(|&r| live(r)) {
+                    let gr = gdof(r, m, sp.ni, nj, nnodes);
+                    for c in (0..8).filter(|&c| live(c)) {
+                        k.add(
+                            gr,
+                            gdof(c, p, sp.ni, nj, nnodes),
+                            ks.get(8 * m + r, 8 * p + c),
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The strips' `K` and `Kg` alone, CUFSM's assembly loop in `stripmain.m`.
+pub fn assemble_strips(model: &Model, a: f64, bc: BoundaryCondition, m_a: &[f64]) -> (Mat, Mat) {
     let nnodes = model.nodes.len();
     let tm = m_a.len();
     let mut k = Mat::zeros(4 * nnodes * tm);

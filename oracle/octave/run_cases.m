@@ -52,6 +52,11 @@ for c = 1:numel(cases)
       node(fx(i, 1), fx(i, 2)) = 0;
     end
   end
+  springs = 0;
+  if isfield(cs, 'springs') && ~isempty(cs.springs)
+    springs = cs.springs;
+    if isvector(springs), springs = springs(:)'; end
+  end
   constraints = 0;
   if isfield(cs, 'constraints') && ~isempty(cs.constraints)
     constraints = cs.constraints;
@@ -101,7 +106,7 @@ for c = 1:numel(cases)
   end
 
   % Stage 3: the full analysis, CUFSM's stripmain.m unmodified.
-  [curve, shapes] = stripmain(prop, node, elem, lengths, 0, constraints, GBTcon, BC, m_all, neigs);
+  [curve, shapes] = stripmain(prop, node, elem, lengths, springs, constraints, GBTcon, BC, m_all, neigs);
   lf = cell(numel(lengths), 1);
   mode1 = cell(numel(lengths), 1);
   for l = 1:numel(lengths)
@@ -128,6 +133,25 @@ for c = 1:numel(cases)
       [k, kg] = trans(elprop(i, 3), k_l, kg_l, ma);
       [KL, KgL] = assemble(KL, KgL, k, kg, elem(i, 2), elem(i, 3), nn, ma);
     end
+    % Springs exactly as stripmain.m adds them (the v4.3 method).
+    if ~isempty(springs) && size(springs, 2) == 10 && springs(1, 1) ~= 0
+      for si = 1:size(springs, 1)
+        ks_l = spring_klocal(springs(si, 4), springs(si, 5), springs(si, 6), springs(si, 7), al, BC, ma, springs(si, 9), springs(si, 10) * al);
+        ni_s = springs(si, 2); nj_s = springs(si, 3);
+        if nj_s == 0
+          alpha_s = 0;
+        else
+          dxs = node(nj_s, 2) - node(ni_s, 2); dzs = node(nj_s, 3) - node(ni_s, 3);
+          if sqrt(dxs^2 + dzs^2) < 1e-10 || springs(si, 8) == 0
+            alpha_s = 0;
+          else
+            alpha_s = atan2(dzs, dxs);
+          end
+        end
+        ks = spring_trans(alpha_s, ks_l, ma);
+        KL = spring_assemble(KL, ks, ni_s, nj_s, nn, ma);
+      end
+    end
     if constr_BCFlag(node, constraints) == 0
       R = speye(4 * nn * tml);
     else
@@ -150,6 +174,7 @@ for c = 1:numel(cases)
   r.nu = nu;
   r.actions = ac;
   r.constraints = constraints;
+  r.springs = springs;
   r.neigs = neigs;
   r.node = node;
   r.elem = elem(:, 1:4);

@@ -5,7 +5,7 @@
 //! ported one for one, including the two flexural entries CUFSM itself marks as not symmetric
 //! within a block (they are symmetric across the `(m, p)` / `(p, m)` pair).
 
-use crate::bc::bc_i1_5;
+use crate::bc::{bc_i1_5, bc_i1_5_atpoint};
 use crate::dense::Mat;
 use crate::model::{BoundaryCondition, Material};
 use std::f64::consts::PI;
@@ -170,6 +170,57 @@ pub fn kglocal(a: f64, b: f64, ty1: f64, ty2: f64, bc: BoundaryCondition, m_a: &
         }
     }
     kg
+}
+
+/// A spring's local stiffness, CUFSM `spring_klocal.m`, in the strip DOF order. A foundation
+/// spring integrates the shape functions over the length; a discrete one takes them at `ys`.
+#[allow(clippy::too_many_arguments)]
+pub fn spring_klocal(
+    ku: f64,
+    kv: f64,
+    kw: f64,
+    kq: f64,
+    a: f64,
+    bc: BoundaryCondition,
+    m_a: &[f64],
+    discrete: bool,
+    ys: f64,
+) -> Mat {
+    let tm = m_a.len();
+    let mut k = Mat::zeros(8 * tm);
+    for m in 0..tm {
+        for p in 0..tm {
+            let um = m_a[m] * PI;
+            let up = m_a[p] * PI;
+            let (i1, i5) = if discrete {
+                let [i1, i5] = bc_i1_5_atpoint(bc, m_a[m], m_a[p], a, ys);
+                (i1, i5)
+            } else {
+                let [i1, _, _, _, i5] = bc_i1_5(bc, m_a[m], m_a[p], a);
+                (i1, i5)
+            };
+            let kvv = kv * i5 * a * a / (um * up);
+            let km = [
+                [ku * i1, 0.0, -ku * i1, 0.0],
+                [0.0, kvv, 0.0, -kvv],
+                [-ku * i1, 0.0, ku * i1, 0.0],
+                [0.0, -kvv, 0.0, kvv],
+            ];
+            let kf = [
+                [kw * i1, 0.0, -kw * i1, 0.0],
+                [0.0, kq * i1, 0.0, -kq * i1],
+                [-kw * i1, 0.0, kw * i1, 0.0],
+                [0.0, -kq * i1, 0.0, kq * i1],
+            ];
+            for r in 0..4 {
+                for c in 0..4 {
+                    k.set(8 * m + r, 8 * p + c, km[r][c]);
+                    k.set(8 * m + 4 + r, 8 * p + 4 + c, kf[r][c]);
+                }
+            }
+        }
+    }
+    k
 }
 
 /// Rotates a local strip matrix into the section's global axes, CUFSM `trans.m`:

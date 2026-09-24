@@ -54,6 +54,9 @@ for r in json.load(open(src)):
         error = f"{type(e).__name__}: {e}"
         lfs = []
     fixed = bool((node[:, 3:7] == 0).any()) or len(cons) > 0
-    out.append({"name": r["name"], "load_factors": lfs, "fixed_or_constrained": fixed, "error": error})
+    # pyCUFSM's springs are not CUFSM's v4.3 springs (a foundation/total flag in place of CUFSM's
+    # local/global one), so spring cases are run without them and marked not comparable.
+    has_springs = isinstance(r.get("springs"), list) and len(r["springs"]) > 0
+    out.append({"name": r["name"], "load_factors": lfs, "fixed_or_constrained": fixed, "has_springs": has_springs, "error": error})
     print(f"{r['name']}: {error or f'{len(lfs)} lengths, lowest {min(min(l) for l in lfs if l):.6g}'}")
 json.dump(out, open(dst, "w"))

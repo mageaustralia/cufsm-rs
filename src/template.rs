@@ -289,5 +289,6 @@ pub fn templatecalc(tp: &Template, material: Material) -> Model {
         nodes,
         elements,
         constraints: vec![],
+        springs: vec![],
     }
 }

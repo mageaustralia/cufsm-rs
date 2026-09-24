@@ -12,6 +12,9 @@
 //! - More than one longitudinal term: it fails padding its mode shapes
 //!   ("could not broadcast ... (5,352) into shape (5,44)").
 //!
+//! - Springs: pyCUFSM's are not CUFSM's v4.3 springs (a foundation/total flag in place of the
+//!   local/global one), so spring cases are compared with CUFSM only.
+//!
 //! Those cases are listed and skipped, not compared.
 
 mod common;
@@ -33,7 +36,10 @@ fn load_factors_match_pycufsm() {
     let mut worst = (0.0_f64, String::new());
     for p in &py {
         let name = p["name"].as_str().unwrap();
-        if !p["error"].is_null() || p["fixed_or_constrained"].as_bool().unwrap() {
+        if !p["error"].is_null()
+            || p["fixed_or_constrained"].as_bool().unwrap()
+            || p["has_springs"].as_bool().unwrap()
+        {
             skipped.push(name.to_string());
             continue;
         }
