@@ -1,6 +1,6 @@
 [package]
 name = "cufsm-rs"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT"
@@ -15,6 +15,11 @@ exclude = ["tests", "oracle", "examples/dump_matrices.rs"]
 
 [lib]
 name = "cufsm"
+
+[features]
+# The C-ABI in src/ffi.rs for a standalone wasm module. Off by default so a crate linking
+# cufsm-rs does not export its symbols.
+ffi = []
 
 [dependencies]
 

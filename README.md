@@ -37,6 +37,8 @@ If you use this in published work, cite CUFSM as its
   all four O-space options. The coupled basis, used with several longitudinal terms, follows
   CUFSM's `base_update.m`, including that branch's different numbering of the O-space options.
 - `cutwp_prop2`: shear centre, torsion and warping constants, and the warping function.
+- An optional interface for calling the crate from JavaScript as a WebAssembly module (see
+  [Calling it from a web page](#calling-it-from-a-web-page)).
 
 ## Example
 
@@ -59,6 +61,28 @@ for min in signature_minima(&curve) {
 ```
 
 The crate is named `cufsm-rs` on crates.io and imported as `cufsm`.
+
+## Calling it from a web page
+
+The `ffi` feature, which is off by default, adds a small C interface. With it, the crate builds
+as a WebAssembly module that JavaScript can call directly, without a binding library:
+
+```sh
+cargo rustc --release --lib --features ffi --crate-type cdylib --target wasm32-unknown-unknown
+```
+
+The module has two functions:
+
+- `cufsm_signature` returns the buckling load factor at each length. It can also return the
+  load factors restricted to the G, D, L and O spaces.
+- `cufsm_modes` returns the lowest mode at each length, with its G, D, L and O percentages.
+
+Inputs and outputs are arrays of numbers in the module's memory. `src/ffi.rs` describes their
+layout. For S-S, the lengths are half-wavelengths and there must be one longitudinal term,
+because that is what defines the signature curve. For the other end conditions, the lengths are
+member lengths and any number of terms can be used.
+
+A crate that depends on cufsm-rs does not get these functions unless it turns the feature on.
 
 ## Validation
 
