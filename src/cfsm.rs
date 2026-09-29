@@ -384,7 +384,20 @@ fn to_new_order(k: &RMat, perm: &[usize]) -> RMat {
     o
 }
 
-/// CUFSM `constr_planar_xz.m`: `Rp = -Kpp \ Kpc`.
+/// CUFSM `constr_planar_xz.m`: `Rp = -Kpp \ Kpc`, the in-plane displacements and rotations of
+/// the edge and sub nodes (and the main-node rotations) that the corner displacements imply, by
+/// least transverse energy.
+///
+/// Two cases CUFSM leaves to MATLAB's backslash are settled here:
+///
+/// - With no corner node (a flat plate), there is nothing to propagate: `Rp` has no columns.
+/// - With one corner node (an angle, a T, a cruciform), the whole section can turn rigidly about
+///   that corner at no transverse energy, so `Kpp` is singular and the answer is unique only up
+///   to that rotation. MATLAB warns and returns whatever rounding gives. This takes the solution
+///   with no net rotation (the rotations sum to zero), found from the bordered system
+///   `[Kpp g; gᵀ 0]`, `g` the rotation DOFs: a corner translation then moves the section
+///   rigidly, as the global bending modes need. The rigid rotation itself is not lost: it lies in
+///   the local space, which holds the edge nodes' transverse displacements and every rotation.
 pub fn constr_planar_xz(
     model: &Model,
     bp: &BaseProperties,
@@ -406,10 +419,37 @@ pub fn constr_planar_xz(
             kpc.set(i - p0, j - c0, k.get(i, j));
         }
     }
-    let x = solve(&kpp, &kpc).ok_or_else(|| {
-        Error::InvalidModel("cFSM: the transverse stiffness Kpp is singular".into())
-    })?;
-    Ok(x.scale(-1.0))
+    if kpc.c == 0 {
+        return Ok(kpc);
+    }
+    if let Some(x) = solve(&kpp, &kpc) {
+        return Ok(x.scale(-1.0));
+    }
+    let singular = || Error::InvalidModel("cFSM: the transverse stiffness Kpp is singular".into());
+    if bp.ncno != 1 {
+        return Err(singular());
+    }
+    // The p block, in the new order: edge x, edge z, main-node θ, sub x, sub z, sub θ.
+    let (neno, nmno, nsno) = (bp.nmno - bp.ncno, bp.nmno, bp.nsno);
+    let n = p1 - p0;
+    let theta = (2 * neno..2 * neno + nmno).chain(2 * neno + nmno + 2 * nsno..n);
+    let scale = (0..n).fold(0.0_f64, |m, i| m.max(kpp.get(i, i).abs()));
+    let mut bordered = RMat::zeros(n + 1, n + 1);
+    bordered.put(0, 0, &kpp);
+    for i in theta {
+        bordered.set(i, n, scale);
+        bordered.set(n, i, scale);
+    }
+    let mut rhs = RMat::zeros(n + 1, kpc.c);
+    rhs.put(0, 0, &kpc);
+    let x = solve(&bordered, &rhs).ok_or_else(singular)?;
+    // The multiplier is zero when the corner loads do no work on the rigid rotation, as they
+    // must; anything else is a mechanism the rotation does not explain.
+    let kpc_max = kpc.data.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+    if (0..kpc.c).any(|j| (x.get(n, j) * scale).abs() > 1e-8 * kpc_max) {
+        return Err(singular());
+    }
+    Ok(x.rows(0, n).scale(-1.0))
 }
 
 /// CUFSM `constr_ys_ym.m`: `Rys` (sub nodes x main nodes), sub-node warping by linear
@@ -571,8 +611,18 @@ pub fn ydofs(
         dy.set(i, 2, xz.0 - cg.0);
         dy.set(i, 3, cw.wn[mn.orig]);
     }
+    // A pattern that is zero at every main node is not a mode of this section: a flat plate has no
+    // out-of-plane bending warping, and an angle, T or cruciform no torsional warping at its main
+    // nodes. CUFSM tests for an exact zero, which rounding defeats (an angle's warping comes back
+    // near 1e-12 mm²), and a spurious column then leaves one base vector too many. Zero here is
+    // relative: 1e-9 of the section's size for the bending patterns, of its size squared for
+    // warping.
+    let size = (0..bp.nmno).fold(0.0_f64, |m, i| {
+        m.max(dy.get(i, 1).abs()).max(dy.get(i, 2).abs())
+    });
+    let zero = [0.0, 1e-9 * size, 1e-9 * size, 1e-9 * size * size];
     let keep: Vec<usize> = (0..4)
-        .filter(|&j| (0..bp.nmno).any(|i| dy.get(i, j) != 0.0))
+        .filter(|&j| (0..bp.nmno).any(|i| dy.get(i, j).abs() > zero[j]))
         .collect();
     let ngm = keep.len();
     let mut out = RMat::zeros(bp.nmno, ngm + bp.ndm);
@@ -637,6 +687,27 @@ pub fn base_vectors(
     let xz = b.rows(nmno, nmno + 2 * ncno).cols(0, ngdm);
     b.put(nmno + 2 * ncno, 0, &rp.mul(&xz));
     b.put(ndof - nsno, 0, &rys.mul(&y));
+    if ncno == 0 && nmno == 2 {
+        // A flat plate: no corner carries the in-plane motion, so it is set here by the rule
+        // constr_xz_y applies along each meta-element, d · (unit from Q to P) = (y_Q − y_P) / L:
+        // the plate slides along its own line by (y₁ − y₂) / L, the in-plane half of its
+        // in-plane bending, with no transverse displacement and no rotation.
+        let e = &bp.m_elem[0];
+        let (p1, p2) = (&bp.m_node[e.n1], &bp.m_node[e.n2]);
+        let len = (p2.x - p1.x).hypot(p2.z - p1.z);
+        let (c, sn) = ((p2.x - p1.x) / len, (p2.z - p1.z) / len);
+        for j in 0..ngdm {
+            let slide = (y.get(e.n1, j) - y.get(e.n2, j)) / len;
+            for k in 0..neno {
+                b.set(nmno + k, j, slide * c);
+                b.set(nmno + neno + k, j, slide * sn);
+            }
+            for k in 0..nsno {
+                b.set(4 * nmno + k, j, slide * c);
+                b.set(4 * nmno + nsno + k, j, slide * sn);
+            }
+        }
+    }
     for i in nmno..(ndof - nsno) {
         for j in 0..ngdm {
             let v = b.get(i, j) / km;

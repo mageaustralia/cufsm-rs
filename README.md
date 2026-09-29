@@ -32,10 +32,12 @@ If you use this in published work, cite CUFSM as its
   - analysis restricted to any of those spaces, for example pure distortional buckling;
   - classification of any mode into G, D, L and O.
 
-  It covers open sections, single- or multi-branched. Restricted analyses honour fixed DOFs,
-  constraints and springs the way CUFSM does. The uncoupled basis (CUFSM's default) supports
-  all four O-space options. The coupled basis, used with several longitudinal terms, follows
-  CUFSM's `base_update.m`, including that branch's different numbering of the O-space options.
+  It covers open sections, single- or multi-branched, including angles, T sections, cruciforms
+  and flat plates, which CUFSM itself cannot classify (see below). Restricted analyses honour
+  fixed DOFs, constraints and springs the way CUFSM does. The uncoupled basis (CUFSM's default)
+  supports all four O-space options. The coupled basis, used with several longitudinal terms,
+  follows CUFSM's `base_update.m`, including that branch's different numbering of the O-space
+  options.
 - `cutwp_prop2`: shear centre, torsion and warping constants, and the warping function.
 - An optional interface for calling the crate from JavaScript as a WebAssembly module (see
   [Calling it from a web page](#calling-it-from-a-web-page)).
@@ -96,6 +98,7 @@ The tests and the reference data are not included in the crates.io package.
 | The models behind the AISI *Direct Strength Method Design Guide* (2006), with the results CUFSM saved at the time | 43 runs: channels, Z sections, hats, angles, a sigma, a rack upright, a built-up section and deck panels, in compression and in bending about either axis. | Over 20,000 load factors to 1e-5, the precision of the saved results, where cond(K) < 1e8. |
 | pyCUFSM, an independent Python port | Over 5,900 load factors, on every case it can run. | Within pyCUFSM's own precision (see below). |
 | Theory (`tests/theory.rs`) | A plate at k = 4 with its minimum at a square half-wave. An outstand at k = 0.425 + (b/a)². A long I-section converging to the Euler load. Every eigenpair satisfying K φ = λ Kg φ. Invariance to E, stress scale, mirroring, renumbering and translation. Convergence from above as the mesh is refined. Springs that only stiffen, and a stiff spring approaching a fixed DOF. | All hold. |
+| Theory, for sections CUFSM cannot classify (`tests/cfsm_few_corners.rs`) | An unequal angle, an equal angle, a T, a cruciform and a flat plate. | Short members classify as local and long ones as global, at the Euler load. Restricted to G, each buckles at the Euler load times 1 / (1 − ν²), as sections CUFSM handles do. A corner translation moves a one-corner section rigidly. |
 | CUFSM's template generator | Every node of 14 template cases. | To 1e-12. |
 | CUFSM's cFSM code, run in Octave | Six sections: sharp and rounded lipped C, lipped Z, plain channel, hat, branched I-section, and a lipped C with a fixity, a constraint and springs. Compared: `cutwp_prop2` properties and warping function, the four modal spaces, load factors restricted to G, D or L, and the classification of every distinct mode under each basis and O-space option. | Properties to 1e-10, spaces to 1e-8, restricted load factors to rounding, classifications to 1e-6 percentage points. |
 
@@ -147,6 +150,20 @@ double precision, and it is well below engineering precision. The parity tests a
   sections are compared with the natural basis, which is unique. The coupled G space of a
   clamped channel also has exact repeats. There, the D : L : O proportions of each mode are
   unique and are compared to 1e-8.
+- CUFSM cannot classify a section with fewer than two corners. Run under Octave, it stops with
+  37 base vectors for the 36 DOFs of an angle, and 21 for the 20 of a flat plate. pyCUFSM fails
+  the same way. There are two causes, and this crate fixes both:
+  - `yDOFs.m` drops a global pattern only when it is exactly zero at every main node. An angle's
+    torsional warping comes back near 1e-12 mm² instead, so an extra vector is kept. This crate
+    treats a pattern as zero below 1e-9 of the section's size (its size squared for warping).
+  - With one corner (an angle, a T, a cruciform), the whole section can turn about that corner at
+    no transverse energy, so `constr_planar_xz.m` solves a singular system. This crate takes the
+    solution with no net rotation, so a corner translation moves the section rigidly. With no
+    corner (a flat plate), there is nothing to solve, and the plate's in-plane bending takes the
+    slide along its own line that CUFSM's corner rule gives on each leg.
+
+  By cFSM's definitions, a mode with no warping at the main nodes is local. So an angle's twist
+  about its corner is local, and so is every out-of-plane mode of a flat plate, at any length.
 - The coupled branch of `base_update.m` numbers its O-space options one higher than the
   uncoupled branch (3, 4 and 5 for `K⁻¹`, `Kg⁻¹` and the null space). With the natural basis
   and the ST O space it produces no vectors, so this crate refuses that combination.

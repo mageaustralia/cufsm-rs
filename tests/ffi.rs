@@ -291,6 +291,57 @@ fn modes_match_the_rust_api() {
     );
 }
 
+/// An angle (one corner) and a flat plate (none) classify through the C interface too.
+#[test]
+fn modes_classify_an_angle_and_a_plate() {
+    let _g = serial();
+    let params = [1.5, 203e3, 0.3, 1.0, 0.0];
+    let lens = [30.0, 30_000.0];
+    for pts in [
+        &[(0.0, 150.0), (0.0, 0.0), (60.0, 0.0)][..],
+        &[(0.0, 0.0), (60.0, 0.0)][..],
+    ] {
+        let nodes: Vec<f64> = pts
+            .iter()
+            .flat_map(|&(x, z)| [x, z, 1.0, 1.0, 1.0])
+            .collect();
+        let elems: Vec<f64> = (0..pts.len() - 1)
+            .flat_map(|i| [i as f64, (i + 1) as f64])
+            .collect();
+        let per = 5 + 1 + 4 * pts.len();
+        let mut out = vec![0.0; 2 * per];
+        let n = unsafe {
+            cufsm_modes(
+                params.as_ptr(),
+                5,
+                nodes.as_ptr(),
+                nodes.len(),
+                elems.as_ptr(),
+                elems.len(),
+                b"S-S".as_ptr(),
+                3,
+                lens.as_ptr(),
+                lens.len(),
+                out.as_mut_ptr(),
+                out.len(),
+            )
+        };
+        assert_eq!(
+            n,
+            (2 * per) as isize,
+            "{pts:?}: {}",
+            if n < 0 { last_error() } else { String::new() }
+        );
+        for row in out.chunks_exact(per) {
+            assert!(
+                (row[..4].iter().sum::<f64>() - 100.0).abs() < 1e-6,
+                "{:?}",
+                &row[..4]
+            );
+        }
+    }
+}
+
 #[test]
 fn alloc_round_trips() {
     let _g = serial();
