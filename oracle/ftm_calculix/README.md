@@ -33,9 +33,14 @@ MESH_SCALE=2 ... run_oracle.py thin_N        # convergence knob, and per-case fi
 
 Reading: the long and thin cases validate the pipeline (the `long_N` spectrum shows the
 Euler doublet, and the shell value climbs to classical as the wave resolves). The stub
-compression gap (`L/R = 4`, about 20%) is the one substantive difference - a likely
-interactive/diamond mode that the paper's Sanders-type strain set (hoop terms left out)
-cannot express. Bending of the same stub agrees to 3%.
+compression gap (`L/R = 4`, about 20%) is the one substantive difference: the shell's
+lowest converged modes are diamond doublets at 2000 (about 0.81 of the classical stress),
+while the FTM's lowest are k = 6 diamond pairs at 2401.6 (about 0.98 of classical) - the
+same family, with the paper's Sanders-type strain set (hoop terms left out) running stiff
+for stub interaction. It is not basis truncation: the FTM value is flat over p = 8..32 and
+q = 6..16, and under uniform compression only the second-order axial strain feeds the
+geometric stiffness, so the difference sits in the elastic kinematics. Bending of the same
+stub agrees to 3%.
 
 ## Deck notes learned the hard way
 
