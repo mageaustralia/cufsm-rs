@@ -23,6 +23,13 @@
 //! * `cufsm_signature` output — one row of `2 + popcount(spaces)` values per length, in input
 //!   order: `L, λ`, then one column per requested space in G, D, L, O order. A length with no
 //!   positive load factor writes `NaN`.
+//! * `cufsm_ftm` — the finite tube method (`crate::ftm`) on one tube. `params`:
+//!   `[R, t, L, E, nu, N, M, T, V, base, top, p, nmodes, nth, ny]`, the actions in N and N·mm
+//!   (compression and the moment's compression side at θ = 0 positive), ends 0 free, 1 pinned,
+//!   2 clamped, `p` circumferential harmonics; `terms` the longitudinal wave numbers. Output:
+//!   `[modes found, unknowns, σN, σM, τT, τV]` (the reference stresses), then per mode
+//!   `[λ, circumferential waves]` and its `(u, v, w)` on an `nth × ny` grid (θ = 2πi/nth,
+//!   y = L j/(ny − 1), θ outer), scaled so the largest coefficient is 1.
 //! * `cufsm_modes` output — per length: `G, D, L, O` (the lowest mode's class percentages),
 //!   `nterms`, the `nterms` longitudinal terms, then the lowest mode's `4 * nodes * nterms`
 //!   entries in CUFSM's order (per term: `u`/`v` interleaved, then `w`/`θ` interleaved).
@@ -400,5 +407,75 @@ pub unsafe extern "C" fn cufsm_modes(
             }
         }
         Ok(buf.len())
+    })
+}
+
+/// The finite tube method on one tube; see the module docs for the layouts.
+///
+/// # Safety
+/// Every pointer must be valid for its length.
+#[no_mangle]
+pub unsafe extern "C" fn cufsm_ftm(
+    params: *const f64,
+    params_len: usize,
+    terms: *const f64,
+    terms_len: usize,
+    out: *mut f64,
+    out_cap: usize,
+) -> isize {
+    use crate::ftm::{ftm_buckle, ftm_field, End, Stresses, Tube};
+    guarded(|| {
+        if params_len < 15 {
+            return Err(format!("params needs 15 values, got {params_len}"));
+        }
+        let p = input(params, 15, "params")?;
+        if terms_len == 0 {
+            return Err("no longitudinal terms given".into());
+        }
+        let js = input(terms, terms_len, "terms")?
+            .iter()
+            .map(|&j| whole(j, 1, 10_000, "a longitudinal wave number"))
+            .collect::<Result<Vec<_>, _>>()?;
+        if p[..9].iter().any(|v| !v.is_finite()) {
+            return Err("a tube dimension, material value or action is not finite".into());
+        }
+        let end = |v: f64, what: &str| -> Result<End, String> {
+            Ok(match whole(v, 0, 2, what)? {
+                0 => End::Free,
+                1 => End::Pinned,
+                _ => End::Clamped,
+            })
+        };
+        let tube = Tube {
+            r: p[0],
+            t: p[1],
+            l: p[2],
+            e: p[3],
+            nu: p[4],
+        };
+        let (base, top) = (end(p[9], "the base end")?, end(p[10], "the top end")?);
+        let harmonics = whole(p[11], 1, 80, "circumferential harmonics")?;
+        let nmodes = whole(p[12], 1, 20, "modes")?;
+        let (nth, ny) = (
+            whole(p[13], 4, 720, "θ points")?,
+            whole(p[14], 2, 720, "y points")?,
+        );
+        let s = Stresses::from_actions(&tube, p[5], p[6], p[7], p[8]);
+        let res =
+            ftm_buckle(&tube, &s, base, top, harmonics, &js, nmodes).map_err(|e| e.to_string())?;
+        let per = 2 + 3 * nth * ny;
+        let buf = output(out, out_cap, 6 + nmodes * per)?;
+        buf[..6].copy_from_slice(&[res.modes.len() as f64, res.dofs as f64, s.n, s.m, s.t, s.v]);
+        let mut k = 6;
+        for mode in &res.modes {
+            buf[k] = mode.load_factor;
+            buf[k + 1] = mode.circ_waves as f64;
+            k += 2;
+            for d in ftm_field(&res, mode, nth, ny) {
+                buf[k..k + 3].copy_from_slice(&d);
+                k += 3;
+            }
+        }
+        Ok(k)
     })
 }

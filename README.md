@@ -39,6 +39,11 @@ If you use this in published work, cite CUFSM as its
   follows CUFSM's `base_update.m`, including that branch's different numbering of the O-space
   options.
 - `cutwp_prop2`: shear centre, torsion and warping constants, and the warping function.
+- The finite tube method (`ftm`) of Ádány and Schafer (Thin-Walled Structures 206, 2025) for
+  circular tubes. It gives the linear buckling load factors and modes under any mix of compression,
+  bending, torsion and shear, with free, pinned or clamped ends. It is checked against Euler
+  columns, the classical cylinder stress and EN 1993-1-6 (`tests/ftm.rs`). One uniform segment
+  only, for now: no stepped or tapered towers, and no pressure.
 - An optional interface for calling the crate from JavaScript as a WebAssembly module (see
   [Calling it from a web page](#calling-it-from-a-web-page)).
 

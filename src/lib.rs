@@ -40,6 +40,7 @@ pub mod cutwp;
 pub mod dense;
 #[cfg(feature = "ffi")]
 pub mod ffi;
+pub mod ftm;
 pub mod linalg;
 pub mod model;
 pub mod section;
