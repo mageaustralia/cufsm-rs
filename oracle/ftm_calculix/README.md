@@ -1,8 +1,8 @@
 # FTM ↔ CalculiX oracle
 
 An independent check on `cufsm-rs`'s finite tube method (`src/ftm.rs`): each case
-is run twice — once through the Fourier-discretised tube, once through a
-continuum shell model in [CalculiX](http://www.calculix.de/) — and the lowest
+is run twice: once through the Fourier-discretised tube, once through a
+continuum shell model in [CalculiX](http://www.calculix.de/), and the lowest
 buckling factors are compared. The two discretisations share nothing but the
 geometry and the load.
 
@@ -30,7 +30,7 @@ python3 oracle/ftm_calculix/run_oracle.py
   (`parse_frd.py` reads the `*NODE FILE` output).
 * **Ends mirror `ftm::End::Pinned`**: `u = w = 0` all round through cylindrical
   `*TRANSFORM`s (dofs 1 = radial, 2 = tangential), with the bottom end also
-  holding axial `v` — Euler k = 1.
+  holding axial `v`: Euler k = 1.
 * **Cases** (`tube_inp.CASES`, kept in step with the example): a long tube that
   must land on Euler, a medium tube in the local/global transition, the same tube
   in bending, and an R/t = 500 thin tube (the convergence case).
@@ -49,5 +49,5 @@ CCX_CMD="docker run --rm -v $PWD/oracle/ftm_calculix/work:/work -w /work <image>
   python3 oracle/ftm_calculix/run_oracle.py
 ```
 
-Without ccx the suite prints the FTM factors and skips — it is still useful as a
+Without ccx the suite prints the FTM factors and skips; it is still useful as a
 regression snapshot.

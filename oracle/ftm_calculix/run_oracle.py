@@ -7,14 +7,14 @@ the first buckling factor from ccx's ``.dat``, runs the same case through
 
 The CalculiX side is skipped gracefully when ccx is not installed. Install with
 conda (`conda install -c conda-forge calculix`) or point CCX_CMD at anything that
-behaves like ``ccx -i <job>`` run in the deck's directory — for example
+behaves like ``ccx -i <job>`` run in the deck's directory, for example
 
     CCX_CMD="docker run --rm -v $PWD:/work -w /work <image> ccx" python3 run_oracle.py
 
 Conventions reused from an internal plate suite of ours
 (`an internal plate suite of ours`): graceful skip, and
 comparison against the in-house solver as the thing being validated. Its
-``*DLOAD P`` shell caveat does not apply here — this suite loads with *CLOAD.
+``*DLOAD P`` shell caveat does not apply here: this suite loads with *CLOAD.
 """
 
 import math

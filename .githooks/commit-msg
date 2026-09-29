@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# cufsm-rs commit-msg: the same hygiene as the staged text, on the message (a public repo).
+set -uo pipefail
+"$(dirname "$0")/hygiene" message "$1" || { echo $'\033[0;33mCommit blocked by .githooks/commit-msg.\033[0m'; exit 1; }

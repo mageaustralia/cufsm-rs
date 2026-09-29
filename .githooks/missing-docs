@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# The number of public items without docs may fall, never rise. Lower .missing-docs-baseline when
+# you document some; at 0, turn `missing_docs` into an error in src/lib.rs and delete this.
+set -uo pipefail
+cd "$(git rev-parse --show-toplevel)"
+n=$(RUSTFLAGS="-W missing_docs" cargo build --quiet --features ffi --target-dir target/missing-docs 2>&1 | grep -c "missing documentation")
+base=$(cat .missing-docs-baseline)
+if [ "$n" -gt "$base" ]; then echo "public items without docs: $n, up from $base"; exit 1; fi
+[ "$n" -lt "$base" ] && echo "public items without docs: $n (baseline $base: lower it)"
+exit 0

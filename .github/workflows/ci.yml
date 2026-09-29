@@ -15,6 +15,15 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo clippy --all-targets --features ffi -- -D warnings
       - run: cargo test --release --features ffi
+      # The docs build clean (docs.rs), the crate builds from what is packaged, and the count of
+      # public items without docs does not rise (.missing-docs-baseline).
+      - run: cargo doc --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - run: cargo package
+      - run: bash .githooks/missing-docs
+      # A public repo: no em or en dashes and no client brand names in tracked text.
+      - run: bash .githooks/hygiene tracked
       # Dependency-free, so it must build for the browser as it is.
       - run: cargo build --release --lib --target wasm32-unknown-unknown
       # The standalone GUI module (the ffi feature).
@@ -26,3 +35,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.75
       - run: cargo build --lib
       - run: cargo build --lib --features ffi
+  # The public API against the latest release on crates.io: a breaking change needs a new
+  # minor version (0.x) before it can merge.
+  semver:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: obi1kenobi/cargo-semver-checks-action@v2
+        with:
+          feature-group: all-features

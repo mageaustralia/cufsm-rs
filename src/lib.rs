@@ -31,6 +31,10 @@
 // Index loops mirror CUFSM's MATLAB line for line, so a reader can hold the two side by side;
 // iterator rewrites would hide the correspondence the parity tests depend on.
 #![allow(clippy::needless_range_loop)]
+// Unsafe code lives only in the C interface (src/ffi.rs, which allows it), and every unsafe
+// operation there sits in an explicit block.
+#![deny(unsafe_code)]
+#![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod analysis;
 mod banded;

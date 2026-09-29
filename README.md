@@ -218,6 +218,25 @@ cargo run --example dump_matrices -- matlab AXIAL 300 > km.json && python3 oracl
 Octave's `eigs.m` is GPL-licensed. It is copied into a temporary folder when the scripts run and
 is never stored in this repository.
 
+## Development
+
+Enable the repository's git hooks once per clone:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+- **pre-commit** (about 10 s): `cargo fmt --check`, clippy with warnings as errors with and without
+  the `ffi` feature, and a scan of the staged text for em or en dashes and client names.
+- **pre-push** (about a minute): the tests, the docs built with warnings as errors, the packaged
+  crate building, and the count of public items without docs not rising
+  (`.missing-docs-baseline`: lower it when you document some).
+
+CI runs the same checks. It also runs `cargo-semver-checks` against the latest release on
+crates.io, so a change that breaks the public API needs a new minor version first. Unsafe code is
+denied everywhere except the C interface in `src/ffi.rs`, where every unsafe operation sits in its
+own block with a note on why it is sound.
+
 ## Licence
 
 MIT. See [`LICENSE`](LICENSE), which includes CUFSM's copyright notice as well as this port's.

@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Text hygiene for a public repo: no em or en dashes (ASCII hyphens only) and no client brand
+# names. `hygiene staged` checks the staged files, `hygiene tracked` every tracked file (CI), and
+# `hygiene message FILE` a commit message.
+set -uo pipefail
+RED=$'\033[0;31m'; RST=$'\033[0m'
+DASHES=$'(\xe2\x80\x94|\xe2\x80\x93)'
+BRANDS='(tenniswarehouse|picklewarehouse)'
+fail=0
+check() {  # label, file
+  if grep -nE "$DASHES" "$2" >/dev/null 2>&1; then
+    echo "${RED}[FAIL] em or en dash in $1:${RST}"; grep -nE "$DASHES" "$2" | head -5 | sed 's/^/    /'; fail=1; fi
+  if grep -inE "$BRANDS" "$2" >/dev/null 2>&1; then
+    echo "${RED}[FAIL] client brand name in $1:${RST}"; grep -inE "$BRANDS" "$2" | head -5 | sed 's/^/    /'; fail=1; fi
+}
+if [ "${1:-}" = message ]; then
+  check "the commit message" "$2"
+else
+  if [ "${1:-}" = tracked ]; then list() { git ls-files; }; else list() { git diff --cached --name-only --diff-filter=ACMR; }; fi
+  while IFS= read -r f; do
+    [ -z "$f" ] || [ ! -f "$f" ] && continue
+    case "$f" in .githooks/*|*.lock|*.png|*.jpg|*.svg|*.wasm|*.json.gz) continue ;; esac
+    check "$f" "$f"
+  done < <(list)
+fi
+exit $fail

@@ -8,10 +8,38 @@ fn cases() -> Vec<(&'static str, Tube, Stresses)> {
     let nu = 0.3;
     let tube = |r: f64, t: f64, l: f64| Tube { r, t, l, e, nu };
     vec![
-        ("long_N", tube(100.0, 2.0, 8000.0), Stresses { n: 1.0, ..Stresses::default() }),
-        ("med_N", tube(100.0, 2.0, 400.0), Stresses { n: 1.0, ..Stresses::default() }),
-        ("med_M", tube(100.0, 2.0, 400.0), Stresses { m: 1.0, ..Stresses::default() }),
-        ("thin_N", tube(500.0, 1.0, 2000.0), Stresses { n: 1.0, ..Stresses::default() }),
+        (
+            "long_N",
+            tube(100.0, 2.0, 8000.0),
+            Stresses {
+                n: 1.0,
+                ..Stresses::default()
+            },
+        ),
+        (
+            "med_N",
+            tube(100.0, 2.0, 400.0),
+            Stresses {
+                n: 1.0,
+                ..Stresses::default()
+            },
+        ),
+        (
+            "med_M",
+            tube(100.0, 2.0, 400.0),
+            Stresses {
+                m: 1.0,
+                ..Stresses::default()
+            },
+        ),
+        (
+            "thin_N",
+            tube(500.0, 1.0, 2000.0),
+            Stresses {
+                n: 1.0,
+                ..Stresses::default()
+            },
+        ),
     ]
 }
 

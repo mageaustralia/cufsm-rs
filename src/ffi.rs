@@ -6,31 +6,31 @@
 //!
 //! Everything crosses the boundary as flat `f64` buffers in linear memory: the caller
 //! allocates with [`cufsm_alloc`], fills, calls, reads, then frees with [`cufsm_dealloc`]. No
-//! `wasm-bindgen`, so the crate keeps its one promise — no dependencies — and the glue in the
+//! `wasm-bindgen`, so the crate keeps its one promise (no dependencies), and the glue in the
 //! page is a dozen lines of `WebAssembly.instantiate`.
 //!
 //! Layouts (all little-endian `f64` unless said otherwise):
 //!
-//! * `params` — `[t, E, nu, terms, spaces]`
-//! * `nodes` — 5 per node: `x, z, stress, free_x, free_z` (the last two 0 or 1)
-//! * `elems` — 2 per element: `node_i, node_j`; every element takes `t` from `params`
-//! * `bc` — UTF-8 bytes of CUFSM's boundary condition string, `S-S`, `C-C`, `S-C`, `C-F`, `C-G`
-//! * `lengths` — for `S-S`, half-wavelengths, with `terms` = 1 (the signature curve takes the
+//! * `params`: `[t, E, nu, terms, spaces]`
+//! * `nodes`: 5 per node: `x, z, stress, free_x, free_z` (the last two 0 or 1)
+//! * `elems`: 2 per element: `node_i, node_j`; every element takes `t` from `params`
+//! * `bc`: UTF-8 bytes of CUFSM's boundary condition string, `S-S`, `C-C`, `S-C`, `C-F`, `C-G`
+//! * `lengths`: for `S-S`, half-wavelengths, with `terms` = 1 (the signature curve takes the
 //!   single term m = 1; more terms at a half-wavelength would give the curve's minimum over
 //!   L, L/2, … instead, so it is refused). For the other boundary conditions, physical member
 //!   lengths, with the longitudinal terms `1..=terms` (1 to [`MAX_TERMS`]).
-//! * `spaces` — the constrained curves wanted, bits 1 = G, 2 = D, 4 = L, 8 = O (0 to 15).
-//! * `cufsm_signature` output — one row of `2 + popcount(spaces)` values per length, in input
+//! * `spaces`: the constrained curves wanted, bits 1 = G, 2 = D, 4 = L, 8 = O (0 to 15).
+//! * `cufsm_signature` output: one row of `2 + popcount(spaces)` values per length, in input
 //!   order: `L, λ`, then one column per requested space in G, D, L, O order. A length with no
 //!   positive load factor writes `NaN`.
-//! * `cufsm_ftm` — the finite tube method (`crate::ftm`) on one tube. `params`:
+//! * `cufsm_ftm`: the finite tube method (`crate::ftm`) on one tube. `params`:
 //!   `[R, t, L, E, nu, N, M, T, V, base, top, p, nmodes, nth, ny]`, the actions in N and N·mm
 //!   (compression and the moment's compression side at θ = 0 positive), ends 0 free edge,
 //!   1 pinned, 2 clamped, 3 free with a stiff ring, `p` circumferential harmonics; `terms` the longitudinal wave numbers. Output:
 //!   `[modes found, unknowns, σN, σM, τT, τV]` (the reference stresses), then per mode
 //!   `[λ, circumferential waves]` and its `(u, v, w)` on an `nth × ny` grid (θ = 2πi/nth,
 //!   y = L j/(ny − 1), θ outer), scaled so the largest coefficient is 1.
-//! * `cufsm_modes` output — per length: `G, D, L, O` (the lowest mode's class percentages),
+//! * `cufsm_modes` output: per length: `G, D, L, O` (the lowest mode's class percentages),
 //!   `nterms`, the `nterms` longitudinal terms, then the lowest mode's `4 * nodes * nterms`
 //!   entries in CUFSM's order (per term: `u`/`v` interleaved, then `w`/`θ` interleaved).
 //!
@@ -39,6 +39,8 @@
 //! next failing call; the slot is one per process, so native callers on several threads must
 //! serialise). A panic inside the analysis is caught and reported the same way on native
 //! targets; on `wasm32-unknown-unknown`, which aborts on panic, it traps the instance.
+
+#![allow(unsafe_code)]
 
 use std::alloc::{alloc, dealloc, Layout};
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -112,7 +114,8 @@ pub extern "C" fn cufsm_alloc(n: usize) -> *mut u8 {
 #[no_mangle]
 pub unsafe extern "C" fn cufsm_dealloc(p: *mut u8, n: usize) {
     if let (false, Some(l)) = (p.is_null(), block(n)) {
-        dealloc(p, l);
+        // SAFETY: the caller passes a block from cufsm_alloc(n), which allocated this layout.
+        unsafe { dealloc(p, l) };
     }
 }
 
@@ -133,7 +136,8 @@ unsafe fn input<'a>(p: *const f64, len: usize, what: &str) -> Result<&'a [f64], 
     if p.is_null() {
         return Err(format!("no {what} given"));
     }
-    Ok(slice::from_raw_parts(p, len))
+    // SAFETY: not null (checked above); the caller guarantees `len` readable values at `p`.
+    Ok(unsafe { slice::from_raw_parts(p, len) })
 }
 
 /// A whole number in `lo..=hi`, or why not.
@@ -186,10 +190,11 @@ unsafe fn read_input(
     if lengths_len == 0 {
         return Err("no lengths given".into());
     }
-    let p = input(params, N_PARAMS, "params")?;
-    let raw_nodes = input(nodes, nodes_len, "nodes")?;
-    let raw_elems = input(elems, elems_len, "elems")?;
-    let lens = input(lengths, lengths_len, "lengths")?;
+    // SAFETY (this and the three below): the caller guarantees each pointer is valid for its length.
+    let p = unsafe { input(params, N_PARAMS, "params") }?;
+    let raw_nodes = unsafe { input(nodes, nodes_len, "nodes") }?;
+    let raw_elems = unsafe { input(elems, elems_len, "elems") }?;
+    let lens = unsafe { input(lengths, lengths_len, "lengths") }?;
 
     let (t, e, nu) = (p[0], p[1], p[2]);
     if !(t.is_finite() && t > 0.0) {
@@ -211,7 +216,8 @@ unsafe fn read_input(
     if bc.is_null() || bc_len == 0 {
         return Err("no boundary condition given".into());
     }
-    let s = std::str::from_utf8(slice::from_raw_parts(bc, bc_len))
+    // SAFETY: not null and non-empty (checked above); the caller guarantees `bc_len` bytes at `bc`.
+    let s = std::str::from_utf8(unsafe { slice::from_raw_parts(bc, bc_len) })
         .map_err(|_| "boundary condition is not UTF-8".to_string())?;
     let bc =
         BoundaryCondition::parse(s).ok_or_else(|| format!("unknown boundary condition {s:?}"))?;
@@ -278,7 +284,9 @@ unsafe fn output<'a>(out: *mut f64, out_cap: usize, need: usize) -> Result<&'a m
             "output buffer is too small: {need} values needed, {out_cap} given"
         ));
     }
-    Ok(slice::from_raw_parts_mut(out, need))
+    // SAFETY: not null and `need <= out_cap` (checked above); the caller guarantees `out_cap`
+    // writable values at `out`, not aliased while the export runs.
+    Ok(unsafe { slice::from_raw_parts_mut(out, need) })
 }
 
 fn first_lf(r: &crate::LengthResult) -> f64 {
@@ -306,20 +314,24 @@ pub unsafe extern "C" fn cufsm_signature(
     out_cap: usize,
 ) -> isize {
     guarded(|| {
-        let i = read_input(
-            params,
-            params_len,
-            nodes,
-            nodes_len,
-            elems,
-            elems_len,
-            bc,
-            bc_len,
-            lengths,
-            lengths_len,
-        )?;
+        // SAFETY: the export's own contract: every pointer valid for its length.
+        let i = unsafe {
+            read_input(
+                params,
+                params_len,
+                nodes,
+                nodes_len,
+                elems,
+                elems_len,
+                bc,
+                bc_len,
+                lengths,
+                lengths_len,
+            )
+        }?;
         let stride = 2 + i.spaces.count_ones() as usize;
-        let buf = output(out, out_cap, i.lengths.len() * stride)?;
+        // SAFETY: the export's contract: `out` valid for `out_cap` values.
+        let buf = unsafe { output(out, out_cap, i.lengths.len() * stride) }?;
         let free =
             stripmain(&i.model, &i.lengths, &i.m_all, i.bc, NEIGS).map_err(|e| e.to_string())?;
         for (row, r) in buf.chunks_exact_mut(stride).zip(&free) {
@@ -369,22 +381,26 @@ pub unsafe extern "C" fn cufsm_modes(
     out_cap: usize,
 ) -> isize {
     guarded(|| {
-        let i = read_input(
-            params,
-            params_len,
-            nodes,
-            nodes_len,
-            elems,
-            elems_len,
-            bc,
-            bc_len,
-            lengths,
-            lengths_len,
-        )?;
+        // SAFETY: the export's own contract: every pointer valid for its length.
+        let i = unsafe {
+            read_input(
+                params,
+                params_len,
+                nodes,
+                nodes_len,
+                elems,
+                elems_len,
+                bc,
+                bc_len,
+                lengths,
+                lengths_len,
+            )
+        }?;
         let nn = i.model.nodes.len();
         let nt = i.m_all[0].len();
         let per = 5 + nt + 4 * nn * nt;
-        let buf = output(out, out_cap, i.lengths.len() * per)?;
+        // SAFETY: the export's contract: `out` valid for `out_cap` values.
+        let buf = unsafe { output(out, out_cap, i.lengths.len() * per) }?;
         let results =
             stripmain(&i.model, &i.lengths, &i.m_all, i.bc, NEIGS).map_err(|e| e.to_string())?;
         let classes = cfsm::classify(
@@ -428,11 +444,13 @@ pub unsafe extern "C" fn cufsm_ftm(
         if params_len < 15 {
             return Err(format!("params needs 15 values, got {params_len}"));
         }
-        let p = input(params, 15, "params")?;
+        // SAFETY: the export's contract: every pointer valid for its length.
+        let p = unsafe { input(params, 15, "params") }?;
         if terms_len == 0 {
             return Err("no longitudinal terms given".into());
         }
-        let js = input(terms, terms_len, "terms")?
+        // SAFETY: as above.
+        let js = unsafe { input(terms, terms_len, "terms") }?
             .iter()
             .map(|&j| whole(j, 1, 10_000, "a longitudinal wave number"))
             .collect::<Result<Vec<_>, _>>()?;
@@ -465,7 +483,8 @@ pub unsafe extern "C" fn cufsm_ftm(
         let res =
             ftm_buckle(&tube, &s, base, top, harmonics, &js, nmodes).map_err(|e| e.to_string())?;
         let per = 2 + 3 * nth * ny;
-        let buf = output(out, out_cap, 6 + nmodes * per)?;
+        // SAFETY: the export's contract: `out` valid for `out_cap` values.
+        let buf = unsafe { output(out, out_cap, 6 + nmodes * per) }?;
         buf[..6].copy_from_slice(&[res.modes.len() as f64, res.dofs as f64, s.n, s.m, s.t, s.v]);
         let mut k = 6;
         for mode in &res.modes {

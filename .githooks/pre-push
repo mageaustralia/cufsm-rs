@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# cufsm-rs pre-push: the slower checks CI runs (about a minute).
+#   the tests with the ffi feature, the docs with warnings as errors, the packaged crate building,
+#   and the count of public items without docs not growing (.missing-docs-baseline).
+set -uo pipefail
+# The maintainer's global hook (secret scanner, public-repo warning) runs first if installed; it
+# hands back to this one when it is done, and the guard stops the loop.
+if [ -z "${CUFSM_CHAINED:-}" ] && [ -x "$HOME/.config/git/hooks/pre-push" ]; then
+  CUFSM_CHAINED=1 exec "$HOME/.config/git/hooks/pre-push" "$@"
+fi
+cd "$(git rev-parse --show-toplevel)"
+RED=$'\033[0;31m'; GRN=$'\033[0;32m'; RST=$'\033[0m'
+run() { echo "· $*"; "$@" >/tmp/cufsm-pre-push.log 2>&1 || { echo "${RED}[FAIL] $*${RST}"; tail -30 /tmp/cufsm-pre-push.log; exit 1; }; }
+run cargo test --release --quiet --features ffi
+RUSTDOCFLAGS="-D warnings" run cargo doc --quiet --no-deps --all-features
+run cargo package --quiet --allow-dirty
+run bash .githooks/missing-docs
+echo "${GRN}[OK] pre-push: tests, docs, package and the docs ratchet pass${RST}"

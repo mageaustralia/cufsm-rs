@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# cufsm-rs pre-commit: fast checks on what is being committed (about 10 s).
+#   1. secrets, through the maintainer's global hook when it is installed
+#   2. hygiene of the staged text: no em or en dashes, no client brand names
+#   3. cargo fmt --check, and clippy with warnings as errors, with and without the ffi feature
+# Enable once per clone:  git config core.hooksPath .githooks
+# Bypass only for a verified false positive:  git commit --no-verify
+set -uo pipefail
+# The maintainer's global hook (secret scanner, public-repo warning) runs first if installed; it
+# hands back to this one when it is done, and the guard stops the loop.
+if [ -z "${CUFSM_CHAINED:-}" ] && [ -x "$HOME/.config/git/hooks/pre-commit" ]; then
+  CUFSM_CHAINED=1 exec "$HOME/.config/git/hooks/pre-commit" "$@"
+fi
+cd "$(git rev-parse --show-toplevel)"
+RED=$'\033[0;31m'; GRN=$'\033[0;32m'; YEL=$'\033[0;33m'; RST=$'\033[0m'
+fail=0
+
+"$(dirname "$0")/hygiene" staged || fail=1
+
+if git diff --cached --name-only --diff-filter=ACMR | grep -qE '\.rs$|^Cargo\.toml$'; then
+  cargo fmt --check >/dev/null 2>&1 || { echo "${RED}[FAIL] cargo fmt --check: run cargo fmt${RST}"; fail=1; }
+  for feat in "" "--features ffi"; do
+    # shellcheck disable=SC2086
+    if ! out=$(cargo clippy --quiet --all-targets $feat -- -D warnings 2>&1); then
+      echo "${RED}[FAIL] cargo clippy --all-targets $feat -- -D warnings${RST}"; echo "$out" | head -30; fail=1
+    fi
+  done
+fi
+
+if [ "$fail" -ne 0 ]; then echo "${YEL}Commit blocked by .githooks/pre-commit.${RST}"; exit 1; fi
+echo "${GRN}[OK] pre-commit: clean${RST}"
