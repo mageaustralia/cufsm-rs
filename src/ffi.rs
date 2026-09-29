@@ -14,6 +14,11 @@
 //! * `params`: `[t, E, nu, terms, spaces]`
 //! * `nodes`: 5 per node: `x, z, stress, free_x, free_z` (the last two 0 or 1)
 //! * `elems`: 2 per element: `node_i, node_j`; every element takes `t` from `params`
+//! * `springs`: 9 per spring (0 for none): `node_i, node_j` (-1 for ground), `k_u, k_v, k_w, k_q`,
+//!   `local` (0 or 1), `discrete` (0 or 1), `ys_fraction` - CUFSM's `springs` row, v4.3 form
+//! * `constraints`: 5 per constraint (0 for none): `node_e, dof_e, coeff, node_k, dof_k`, with
+//!   dof codes 1 = x, 2 = z, 3 = y along the member, 4 = theta, and the row reading
+//!   `u_e = coeff * u_k`
 //! * `bc`: UTF-8 bytes of CUFSM's boundary condition string, `S-S`, `C-C`, `S-C`, `C-F`, `C-G`
 //! * `lengths`: for `S-S`, half-wavelengths, with `terms` = 1 (the signature curve takes the
 //!   single term m = 1; more terms at a half-wavelength would give the curve's minimum over
@@ -48,11 +53,14 @@ use std::slice;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::cfsm::{self, stripmain_constrained, Spaces};
+use crate::model::{Constraint, Dof, Spring};
 use crate::{stripmain, BoundaryCondition, Element, Material, Model, Node};
 
 const N_PARAMS: usize = 5;
 const N_NODE: usize = 5;
 const N_ELEM: usize = 2;
+const N_SPRING: usize = 9;
+const N_CONSTRAINT: usize = 5;
 const NEIGS: usize = 1;
 /// The most longitudinal terms accepted for a boundary condition other than S-S.
 pub const MAX_TERMS: usize = 100;
@@ -173,6 +181,10 @@ unsafe fn read_input(
     bc_len: usize,
     lengths: *const f64,
     lengths_len: usize,
+    springs: *const f64,
+    springs_len: usize,
+    constraints: *const f64,
+    constraints_len: usize,
 ) -> Result<Input, String> {
     if params_len < N_PARAMS {
         return Err(format!("params needs {N_PARAMS} values, got {params_len}"));
@@ -256,12 +268,22 @@ unsafe fn read_input(
         let nj = whole(c[1], 0, n_nodes - 1, "an element's node_j")?;
         out_elems.push(Element { ni, nj, t, mat: 0 });
     }
+    let springs_raw = if springs_len == 0 {
+        &[][..]
+    } else {
+        unsafe { input(springs, springs_len, "springs") }?
+    };
+    let constraints_raw = if constraints_len == 0 {
+        &[][..]
+    } else {
+        unsafe { input(constraints, constraints_len, "constraints") }?
+    };
     let model = Model {
         materials: vec![Material::isotropic(e, nu)],
         nodes: out_nodes,
         elements: out_elems,
-        constraints: vec![],
-        springs: vec![],
+        constraints: read_constraints(constraints_raw, n_nodes)?,
+        springs: read_springs(springs_raw, n_nodes)?,
     };
     model.validate().map_err(|err| err.to_string())?;
     let m: Vec<f64> = (1..=terms).map(|k| k as f64).collect();
@@ -272,6 +294,82 @@ unsafe fn read_input(
         lengths: lens.to_vec(),
         spaces,
     })
+}
+
+/// A dof code for a constraint row: 1 = x, 2 = z, 3 = y along the member, 4 = theta.
+fn dof_of(v: f64, what: &str) -> Result<Dof, String> {
+    match v {
+        1.0 => Ok(Dof::X),
+        2.0 => Ok(Dof::Z),
+        3.0 => Ok(Dof::Y),
+        4.0 => Ok(Dof::Theta),
+        _ => Err(format!("{what} must be a dof code from 1 to 4, got {v}")),
+    }
+}
+
+/// Springs from their 9-value rows: `node_i, node_j` (-1 for ground), stiffnesses, flags.
+fn read_springs(raw: &[f64], n_nodes: usize) -> Result<Vec<Spring>, String> {
+    if raw.len() % N_SPRING != 0 {
+        return Err(format!(
+            "springs length {} is not a multiple of {N_SPRING}",
+            raw.len()
+        ));
+    }
+    let flag = |v: f64, what: &str| match v {
+        0.0 => Ok(false),
+        1.0 => Ok(true),
+        _ => Err(format!("{what} must be 0 or 1, got {v}")),
+    };
+    let mut out = Vec::with_capacity(raw.len() / N_SPRING);
+    for c in raw.chunks_exact(N_SPRING) {
+        if !c[2..=5].iter().all(|v| v.is_finite()) {
+            return Err("a spring stiffness is not finite".into());
+        }
+        if !c[8].is_finite() {
+            return Err("a spring's ys_fraction is not finite".into());
+        }
+        out.push(Spring {
+            ni: whole(c[0], 0, n_nodes - 1, "a spring's node_i")?,
+            nj: if c[1] == -1.0 {
+                None
+            } else {
+                Some(whole(c[1], 0, n_nodes - 1, "a spring's node_j")?)
+            },
+            ku: c[2],
+            kv: c[3],
+            kw: c[4],
+            kq: c[5],
+            local: flag(c[6], "a spring's local flag")?,
+            discrete: flag(c[7], "a spring's discrete flag")?,
+            ys_fraction: c[8],
+        });
+    }
+    Ok(out)
+}
+
+/// Equation constraints from their 5-value rows: `node_e, dof_e, coeff, node_k, dof_k`,
+/// reading `u_e = coeff * u_k`.
+fn read_constraints(raw: &[f64], n_nodes: usize) -> Result<Vec<Constraint>, String> {
+    if raw.len() % N_CONSTRAINT != 0 {
+        return Err(format!(
+            "constraints length {} is not a multiple of {N_CONSTRAINT}",
+            raw.len()
+        ));
+    }
+    let mut out = Vec::with_capacity(raw.len() / N_CONSTRAINT);
+    for c in raw.chunks_exact(N_CONSTRAINT) {
+        if !c[2].is_finite() {
+            return Err("a constraint's coeff is not finite".into());
+        }
+        out.push(Constraint {
+            node_e: whole(c[0], 0, n_nodes - 1, "a constraint's node_e")?,
+            dof_e: dof_of(c[1], "a constraint's dof_e")?,
+            coeff: c[2],
+            node_k: whole(c[3], 0, n_nodes - 1, "a constraint's node_k")?,
+            dof_k: dof_of(c[4], "a constraint's dof_k")?,
+        });
+    }
+    Ok(out)
 }
 
 /// `out` as a mutable slice of `need` values, refusing a null or short buffer.
@@ -310,6 +408,10 @@ pub unsafe extern "C" fn cufsm_signature(
     bc_len: usize,
     lengths: *const f64,
     lengths_len: usize,
+    springs: *const f64,
+    springs_len: usize,
+    constraints: *const f64,
+    constraints_len: usize,
     out: *mut f64,
     out_cap: usize,
 ) -> isize {
@@ -327,6 +429,10 @@ pub unsafe extern "C" fn cufsm_signature(
                 bc_len,
                 lengths,
                 lengths_len,
+                springs,
+                springs_len,
+                constraints,
+                constraints_len,
             )
         }?;
         let stride = 2 + i.spaces.count_ones() as usize;
@@ -377,6 +483,10 @@ pub unsafe extern "C" fn cufsm_modes(
     bc_len: usize,
     lengths: *const f64,
     lengths_len: usize,
+    springs: *const f64,
+    springs_len: usize,
+    constraints: *const f64,
+    constraints_len: usize,
     out: *mut f64,
     out_cap: usize,
 ) -> isize {
@@ -394,6 +504,10 @@ pub unsafe extern "C" fn cufsm_modes(
                 bc_len,
                 lengths,
                 lengths_len,
+                springs,
+                springs_len,
+                constraints,
+                constraints_len,
             )
         }?;
         let nn = i.model.nodes.len();

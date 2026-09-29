@@ -60,6 +60,10 @@ fn signature(params: [f64; 5], bc: &str, lens: &[f64], out: &mut [f64]) -> isize
             bc.len(),
             lens.as_ptr(),
             lens.len(),
+            std::ptr::null(),
+            0,
+            std::ptr::null(),
+            0,
             out.as_mut_ptr(),
             out.len(),
         )
@@ -80,6 +84,10 @@ fn modes(params: [f64; 5], bc: &str, lens: &[f64], out: &mut [f64]) -> isize {
             bc.len(),
             lens.as_ptr(),
             lens.len(),
+            std::ptr::null(),
+            0,
+            std::ptr::null(),
+            0,
             out.as_mut_ptr(),
             out.len(),
         )
@@ -221,6 +229,10 @@ fn node_and_element_buffers_are_checked() {
             3,
             LENS.as_ptr(),
             LENS.len(),
+            std::ptr::null(),
+            0,
+            std::ptr::null(),
+            0,
             out.as_mut_ptr(),
             out.len(),
         )
@@ -246,12 +258,89 @@ fn node_and_element_buffers_are_checked() {
                 3,
                 LENS.as_ptr(),
                 LENS.len(),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
                 out.as_mut_ptr(),
                 out.len(),
             )
         },
         -1
     );
+}
+
+/// Springs and constraints reach the model: the same answers as the Rust API.
+#[test]
+fn springs_and_constraints_reach_the_model() {
+    let _g = serial();
+    let (_, _, mut model) = channel();
+    model.springs.push(cufsm::model::Spring {
+        ni: 0,
+        nj: None,
+        ku: 1e4,
+        kv: 0.0,
+        kw: 1e4,
+        kq: 0.0,
+        local: false,
+        discrete: true,
+        ys_fraction: 0.0,
+    });
+    let lens = [100.0];
+    let m1 = vec![vec![1.0]];
+    let want = stripmain(&model, &lens, &m1, BoundaryCondition::SS, 1).unwrap()[0].load_factors[0];
+    let (nodes, elems, _) = channel();
+    let params = [1.5, 203e3, 0.3, 1.0, 0.0];
+    let springs = [0.0, -1.0, 1e4, 0.0, 1e4, 0.0, 0.0, 1.0, 0.0];
+    let mut out = vec![0.0; 8];
+    let n = unsafe {
+        cufsm_signature(
+            params.as_ptr(),
+            5,
+            nodes.as_ptr(),
+            nodes.len(),
+            elems.as_ptr(),
+            elems.len(),
+            b"S-S".as_ptr(),
+            3,
+            lens.as_ptr(),
+            lens.len(),
+            springs.as_ptr(),
+            springs.len(),
+            std::ptr::null(),
+            0,
+            out.as_mut_ptr(),
+            out.len(),
+        )
+    };
+    assert_eq!(n, 2, "{}", last_error());
+    assert_eq!(out[1], want);
+    // a bad dof code is refused with a message
+    let bad = [0.0, 9.0, 1.0, 1.0, 1.0];
+    assert_eq!(
+        unsafe {
+            cufsm_signature(
+                params.as_ptr(),
+                5,
+                nodes.as_ptr(),
+                nodes.len(),
+                elems.as_ptr(),
+                elems.len(),
+                b"S-S".as_ptr(),
+                3,
+                lens.as_ptr(),
+                lens.len(),
+                std::ptr::null(),
+                0,
+                bad.as_ptr(),
+                bad.len(),
+                out.as_mut_ptr(),
+                out.len(),
+            )
+        },
+        -1
+    );
+    assert!(last_error().contains("dof"), "{}", last_error());
 }
 
 /// Per length: the lowest mode's class, its terms and its shape, as the Rust API gives them.
@@ -322,6 +411,10 @@ fn modes_classify_an_angle_and_a_plate() {
                 3,
                 lens.as_ptr(),
                 lens.len(),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
                 out.as_mut_ptr(),
                 out.len(),
             )
