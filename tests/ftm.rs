@@ -263,3 +263,49 @@ fn the_mode_field_is_the_buckled_shape() {
         assert!((w(i, 2) + w(i + 4, 2)).abs() < 1e-6 * peak);
     }
 }
+
+/// A cantilever under a moment: with a bare free top the compression side buckles at that edge,
+/// at about half the classical stress; a stiff ring there restores the classical value, and does
+/// not stiffen the tube's sway as a column.
+#[test]
+fn a_ring_keeps_a_free_end_round() {
+    let t = tube(251.0, 6.0, 6000.0);
+    let js = default_long_terms(&t, 6);
+    let m = |top| {
+        ftm_buckle(&t, &only(1), End::Clamped, top, 16, &js, 1)
+            .unwrap()
+            .modes[0]
+            .load_factor
+    };
+    let (bare, ring) = (m(End::Free), m(End::Ring));
+    let cl = classical(251.0, 6.0);
+    assert!(
+        bare < 0.6 * cl && bare > 0.35 * cl,
+        "bare edge {bare} vs classical {cl}"
+    );
+    near(ring, cl, 0.04, "ringed top");
+    let n = |top| {
+        ftm_buckle(
+            &t,
+            &only(0),
+            End::Clamped,
+            top,
+            4,
+            &(1..=10).collect::<Vec<_>>(),
+            1,
+        )
+        .unwrap()
+        .modes[0]
+            .load_factor
+    };
+    near(
+        n(End::Ring),
+        n(End::Free),
+        0.002,
+        "sway with and without the ring",
+    );
+    let e = ftm_buckle(&t, &only(0), End::Ring, End::Ring, 4, &[1, 2], 1)
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("mechanism"), "{e}");
+}

@@ -25,8 +25,8 @@
 //!   positive load factor writes `NaN`.
 //! * `cufsm_ftm` — the finite tube method (`crate::ftm`) on one tube. `params`:
 //!   `[R, t, L, E, nu, N, M, T, V, base, top, p, nmodes, nth, ny]`, the actions in N and N·mm
-//!   (compression and the moment's compression side at θ = 0 positive), ends 0 free, 1 pinned,
-//!   2 clamped, `p` circumferential harmonics; `terms` the longitudinal wave numbers. Output:
+//!   (compression and the moment's compression side at θ = 0 positive), ends 0 free edge,
+//!   1 pinned, 2 clamped, 3 free with a stiff ring, `p` circumferential harmonics; `terms` the longitudinal wave numbers. Output:
 //!   `[modes found, unknowns, σN, σM, τT, τV]` (the reference stresses), then per mode
 //!   `[λ, circumferential waves]` and its `(u, v, w)` on an `nth × ny` grid (θ = 2πi/nth,
 //!   y = L j/(ny − 1), θ outer), scaled so the largest coefficient is 1.
@@ -440,10 +440,11 @@ pub unsafe extern "C" fn cufsm_ftm(
             return Err("a tube dimension, material value or action is not finite".into());
         }
         let end = |v: f64, what: &str| -> Result<End, String> {
-            Ok(match whole(v, 0, 2, what)? {
+            Ok(match whole(v, 0, 3, what)? {
                 0 => End::Free,
                 1 => End::Pinned,
-                _ => End::Clamped,
+                2 => End::Clamped,
+                _ => End::Ring,
             })
         };
         let tube = Tube {

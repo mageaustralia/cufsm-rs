@@ -33,8 +33,13 @@ use std::f64::consts::PI;
 /// How an end of the tube is held.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum End {
-    /// Nothing held.
+    /// Nothing held: a bare shell edge, which buckles locally under compression at about half the
+    /// classical stress.
     Free,
+    /// Free to move as a rigid section (translate, rotate, twist) but kept round by a stiff ring or
+    /// flange: the radial breathing and every harmonic from the second up are held (`u`, `v`, `w`).
+    /// The first harmonic is left whole, so a ring's in-plane stretching in it is not resisted.
+    Ring,
     /// `u = w = 0` all round (hinged). The first pinned end also holds `v`, so the tube cannot
     /// slide along its axis.
     Pinned,
@@ -350,7 +355,7 @@ fn forms(tube: &Tube, s: &Stresses) -> (Vec<Form>, Vec<Form>) {
 /// `w` held, the end section free only to turn as a plane.
 fn constraints(tube: &Tube, js: &[usize], base: End, top: End, tabs: &Tables) -> [[RMat; 3]; 3] {
     let nl = 2 * js.len() + 1;
-    let axial_at_base = base != End::Free;
+    let axial_at_base = matches!(base, End::Pinned | End::Clamped);
     let mut rows: [[Vec<Vec<f64>>; 3]; 3] = Default::default();
     for (end, y) in [(base, 0.0), (top, tube.l)] {
         let at = |order: u8| {
@@ -361,6 +366,16 @@ fn constraints(tube: &Tube, js: &[usize], base: End, top: End, tabs: &Tables) ->
         for k in 0..3 {
             match end {
                 End::Free => {}
+                End::Ring => {
+                    if k == 0 {
+                        rows[2][k].push(at(0));
+                    }
+                    if k == 2 {
+                        rows[0][k].push(at(0));
+                        rows[1][k].push(at(0));
+                        rows[2][k].push(at(0));
+                    }
+                }
                 End::Pinned => {
                     rows[0][k].push(at(0));
                     rows[2][k].push(at(0));
@@ -483,7 +498,7 @@ pub fn ftm_buckle(
     // A tube held by one pin, or not at all, can swing as a rigid body. The Fourier series cannot
     // draw that rigid rotation exactly (a straight line along the tube), so the factorisation
     // would not always see it: refuse it outright.
-    let held = |e: End| e != End::Free;
+    let held = |e: End| matches!(e, End::Pinned | End::Clamped);
     if !(base == End::Clamped || top == End::Clamped || (held(base) && held(top))) {
         return Err(bad(
             "the tube is a mechanism under these end conditions: clamp one end, or pin both",
