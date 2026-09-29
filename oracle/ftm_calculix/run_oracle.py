@@ -35,7 +35,7 @@ def parse_first_factor(dat_path: str):
     """The lowest buckling factor from a ccx .dat eigenvalue table.
 
     Tolerant of CalculiX versions: look for an 'E I G E N V A L U E' / 'EIGENVALUE'
-    marker, then the first numeric row of `mode factor`."""
+    marker, then the first numeric rows of `mode factor`."""
     if not os.path.exists(dat_path):
         return None
     text = open(dat_path, errors="replace").read()
@@ -45,7 +45,9 @@ def parse_first_factor(dat_path: str):
         if m:
             rows.append(float(m.group(2)))
     if rows:
-        return min(rows)                      # the lowest factor is the one wanted
+        rows.sort()
+        parse_first_factor.spectrum = rows
+        return rows[0]
     # eigenvalue tables may use packed formats; scan for the marker's numbers
     for m in re.finditer(r"E\s*I\s*G\s*E\s*N\s*V\s*A\s*L\s*U\s*E.{0,200}?([0-9.]+(?:[Ee][+\-]\d+)?)",
                          text, re.S):
@@ -104,7 +106,9 @@ def main():
     ftm = ftm_factors()
     print(f"{'case':8} {'ccx λ':>12} {'FTM λ':>12} {'ratio':>8}  note")
     ok = True
-    for name, c in CASES.items():
+    wanted = sys.argv[1:] or list(CASES)
+    for name in wanted:
+        c = CASES[name]
         deck = input_deck(name, **c)
         job_dir = os.path.join(ORACLE_DIR, "work")
         path = os.path.join(job_dir, name + ".inp")
@@ -121,6 +125,8 @@ def main():
             print(f"{name:8} {'?':>12} {lam_ftm:12.4f} {'-':>8}  no eigenvalue in .dat {note}")
             ok = False
             continue
+        spec = getattr(parse_first_factor, "spectrum", [])
+        print(f"{'':8} ccx spectrum: " + ", ".join(f"{v:.1f}" for v in spec[:5]))
         ratio = lam_ftm / lam_ccx
         verdict = "ok" if 0.95 <= ratio <= 1.05 else "CHECK"
         if verdict != "ok":
