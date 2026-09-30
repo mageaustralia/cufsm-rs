@@ -7,7 +7,7 @@ use cufsm::{stripmain, BoundaryCondition, Element, Material, Model, Node};
 
 /// A 100 x 50 x 15 lipped channel, t = 1.5, in uniform compression: flat buffers and the same
 /// model through the Rust API.
-fn channel() -> (Vec<f64>, Vec<f64>, Model) {
+fn channel() -> (Vec<f64>, Vec<f64>, Vec<f64>, Model) {
     let pts = [
         (50.0, 15.0),
         (50.0, 0.0),
@@ -16,13 +16,17 @@ fn channel() -> (Vec<f64>, Vec<f64>, Model) {
         (50.0, 100.0),
         (50.0, 85.0),
     ];
+    let mat = Material::isotropic(203e3, 0.3);
+    let mats = vec![mat.ex, mat.ey, mat.vx, mat.vy, mat.g];
     let nodes: Vec<f64> = pts
         .iter()
-        .flat_map(|&(x, z)| [x, z, 1.0, 1.0, 1.0])
+        .flat_map(|&(x, z)| [x, z, 1.0, 1.0, 1.0, 1.0, 1.0])
         .collect();
-    let elems: Vec<f64> = (0..5).flat_map(|i| [i as f64, (i + 1) as f64]).collect();
+    let elems: Vec<f64> = (0..5)
+        .flat_map(|i| [i as f64, (i + 1) as f64, 1.5, 0.0])
+        .collect();
     let model = Model {
-        materials: vec![Material::isotropic(203e3, 0.3)],
+        materials: vec![mat],
         nodes: pts.iter().map(|&(x, z)| Node::new(x, z, 1.0)).collect(),
         elements: (0..5)
             .map(|i| Element {
@@ -35,7 +39,7 @@ fn channel() -> (Vec<f64>, Vec<f64>, Model) {
         constraints: vec![],
         springs: vec![],
     };
-    (nodes, elems, model)
+    (mats, nodes, elems, model)
 }
 
 /// The last-error slot is one per process: tests that fail on purpose take turns.
@@ -46,12 +50,14 @@ fn serial() -> std::sync::MutexGuard<'static, ()> {
 
 const LENS: [f64; 6] = [10.0, 50.0, 100.0, 300.0, 1000.0, 3000.0];
 
-fn signature(params: [f64; 5], bc: &str, lens: &[f64], out: &mut [f64]) -> isize {
-    let (nodes, elems, _) = channel();
+fn signature(params: [f64; 3], bc: &str, lens: &[f64], out: &mut [f64]) -> isize {
+    let (mats, nodes, elems, _) = channel();
     unsafe {
         cufsm_signature(
             params.as_ptr(),
-            5,
+            3,
+            mats.as_ptr(),
+            mats.len(),
             nodes.as_ptr(),
             nodes.len(),
             elems.as_ptr(),
@@ -70,12 +76,14 @@ fn signature(params: [f64; 5], bc: &str, lens: &[f64], out: &mut [f64]) -> isize
     }
 }
 
-fn modes(params: [f64; 5], bc: &str, lens: &[f64], out: &mut [f64]) -> isize {
-    let (nodes, elems, _) = channel();
+fn modes(params: [f64; 3], bc: &str, lens: &[f64], out: &mut [f64]) -> isize {
+    let (mats, nodes, elems, _) = channel();
     unsafe {
         cufsm_modes(
             params.as_ptr(),
-            5,
+            3,
+            mats.as_ptr(),
+            mats.len(),
             nodes.as_ptr(),
             nodes.len(),
             elems.as_ptr(),
@@ -104,7 +112,7 @@ fn last_error() -> String {
 #[test]
 fn signature_rows_match_the_rust_api() {
     let _g = serial();
-    let (_, _, model) = channel();
+    let (_, _, _, model) = channel();
     let m1 = vec![vec![1.0]; LENS.len()];
     let free = stripmain(&model, &LENS, &m1, BoundaryCondition::SS, 1).unwrap();
     let only = |g, d, l| Spaces {
@@ -123,7 +131,7 @@ fn signature_rows_match_the_rust_api() {
     .collect();
 
     let mut out = vec![f64::MAX; 40];
-    let n = signature([1.5, 203e3, 0.3, 1.0, 7.0], "S-S", &LENS, &mut out);
+    let n = signature([1.0, 7.0, 1.0], "S-S", &LENS, &mut out);
     assert_eq!(n, 30);
     for (i, row) in out[..30].chunks_exact(5).enumerate() {
         assert_eq!(row[0], LENS[i]);
@@ -143,7 +151,7 @@ fn signature_rows_match_the_rust_api() {
     );
 
     // Only O (bit 8): one extra column, the others untouched.
-    let n = signature([1.5, 203e3, 0.3, 1.0, 8.0], "S-S", &LENS, &mut out);
+    let n = signature([1.0, 8.0, 1.0], "S-S", &LENS, &mut out);
     assert_eq!(n, 18);
 }
 
@@ -153,18 +161,15 @@ fn signature_rows_match_the_rust_api() {
 fn terms_are_checked() {
     let _g = serial();
     let mut out = vec![0.0; 64];
-    assert!(signature([1.5, 203e3, 0.3, 6.0, 0.0], "S-S", &LENS, &mut out) < 0);
+    assert!(signature([6.0, 0.0, 1.0], "S-S", &LENS, &mut out) < 0);
     assert!(last_error().contains("terms must be 1"), "{}", last_error());
-    assert!(signature([1.5, 203e3, 0.3, 0.0, 0.0], "C-C", &LENS, &mut out) < 0);
-    assert!(signature([1.5, 203e3, 0.3, 2.5, 0.0], "C-C", &LENS, &mut out) < 0);
+    assert!(signature([0.0, 0.0, 1.0], "C-C", &LENS, &mut out) < 0);
+    assert!(signature([2.5, 0.0, 1.0], "C-C", &LENS, &mut out) < 0);
     // C-C at physical lengths with three terms: the Rust API's answer.
-    let (_, _, model) = channel();
+    let (_, _, _, model) = channel();
     let m = vec![vec![1.0, 2.0, 3.0]; LENS.len()];
     let r = stripmain(&model, &LENS, &m, BoundaryCondition::CC, 1).unwrap();
-    assert_eq!(
-        signature([1.5, 203e3, 0.3, 3.0, 0.0], "C-C", &LENS, &mut out),
-        12
-    );
+    assert_eq!(signature([3.0, 0.0, 1.0], "C-C", &LENS, &mut out), 12);
     for i in 0..LENS.len() {
         assert_eq!(out[2 * i + 1], r[i].load_factors[0]);
     }
@@ -176,24 +181,14 @@ fn terms_are_checked() {
 fn bad_inputs_fail_cleanly() {
     let _g = serial();
     let mut out = vec![0.0; 64];
-    let cases: [([f64; 5], &str, &[f64], &str); 7] = [
-        ([1.5, 203e3, 0.3, 1.0, 16.0], "S-S", &LENS, "spaces"),
-        ([1.5, 203e3, 0.3, 1.0, 1.5], "S-S", &LENS, "spaces"),
-        ([1.5, 203e3, 0.7, 1.0, 0.0], "S-S", &LENS, "Poisson"),
-        (
-            [1.5, 203e3, 0.3, 1.0, 0.0],
-            "X-X",
-            &LENS,
-            "unknown boundary",
-        ),
-        (
-            [1.5, 203e3, 0.3, 1.0, 0.0],
-            "S-S",
-            &[100.0, f64::NAN],
-            "length",
-        ),
-        ([1.5, 203e3, 0.3, 1.0, 0.0], "S-S", &[100.0, -1.0], "length"),
-        ([0.0, 203e3, 0.3, 1.0, 0.0], "S-S", &LENS, "thickness"),
+    let cases: [([f64; 3], &str, &[f64], &str); 7] = [
+        ([1.0, 16.0, 1.0], "S-S", &LENS, "spaces"),
+        ([1.0, 1.5, 1.0], "S-S", &LENS, "spaces"),
+        ([1.0, 0.0, 0.0], "S-S", &LENS, "neigs"),
+        ([1.0, 0.0, 1.0], "X-X", &LENS, "unknown boundary"),
+        ([1.0, 0.0, 1.0], "S-S", &[100.0, f64::NAN], "length"),
+        ([1.0, 0.0, 1.0], "S-S", &[100.0, -1.0], "length"),
+        ([1.0, 0.0, 99.0], "S-S", &LENS, "neigs"),
     ];
     for (params, bc, lens, why) in cases {
         assert_eq!(signature(params, bc, lens, &mut out), -1, "{why}");
@@ -203,10 +198,7 @@ fn bad_inputs_fail_cleanly() {
     }
     // A short output buffer is refused before anything is written.
     let mut short = vec![7.0; 5];
-    assert_eq!(
-        signature([1.5, 203e3, 0.3, 1.0, 0.0], "S-S", &LENS, &mut short),
-        -1
-    );
+    assert_eq!(signature([1.0, 0.0, 1.0], "S-S", &LENS, &mut short), -1);
     assert!(short.iter().all(|v| *v == 7.0));
 }
 
@@ -214,13 +206,15 @@ fn bad_inputs_fail_cleanly() {
 #[test]
 fn node_and_element_buffers_are_checked() {
     let _g = serial();
-    let (mut nodes, mut elems, _) = channel();
-    let params = [1.5, 203e3, 0.3, 1.0, 0.0];
+    let (mats, mut nodes, mut elems, _) = channel();
+    let params = [1.0, 0.0, 1.0];
     let mut out = vec![0.0; 64];
     let call = |nodes: &[f64], elems: &[f64], out: &mut [f64]| unsafe {
         cufsm_signature(
             params.as_ptr(),
-            5,
+            3,
+            mats.as_ptr(),
+            mats.len(),
             nodes.as_ptr(),
             nodes.len(),
             elems.as_ptr(),
@@ -249,7 +243,9 @@ fn node_and_element_buffers_are_checked() {
         unsafe {
             cufsm_signature(
                 std::ptr::null(),
-                5,
+                3,
+                mats.as_ptr(),
+                mats.len(),
                 nodes.as_ptr(),
                 nodes.len(),
                 elems.as_ptr(),
@@ -274,7 +270,7 @@ fn node_and_element_buffers_are_checked() {
 #[test]
 fn springs_and_constraints_reach_the_model() {
     let _g = serial();
-    let (_, _, mut model) = channel();
+    let (_, _, _, mut model) = channel();
     model.springs.push(cufsm::model::Spring {
         ni: 0,
         nj: None,
@@ -289,14 +285,16 @@ fn springs_and_constraints_reach_the_model() {
     let lens = [100.0];
     let m1 = vec![vec![1.0]];
     let want = stripmain(&model, &lens, &m1, BoundaryCondition::SS, 1).unwrap()[0].load_factors[0];
-    let (nodes, elems, _) = channel();
-    let params = [1.5, 203e3, 0.3, 1.0, 0.0];
+    let (mats, nodes, elems, _) = channel();
+    let params = [1.0, 0.0, 1.0];
     let springs = [0.0, -1.0, 1e4, 0.0, 1e4, 0.0, 0.0, 1.0, 0.0];
     let mut out = vec![0.0; 8];
     let n = unsafe {
         cufsm_signature(
             params.as_ptr(),
-            5,
+            3,
+            mats.as_ptr(),
+            mats.len(),
             nodes.as_ptr(),
             nodes.len(),
             elems.as_ptr(),
@@ -321,7 +319,9 @@ fn springs_and_constraints_reach_the_model() {
         unsafe {
             cufsm_signature(
                 params.as_ptr(),
-                5,
+                3,
+                mats.as_ptr(),
+                mats.len(),
                 nodes.as_ptr(),
                 nodes.len(),
                 elems.as_ptr(),
@@ -347,7 +347,7 @@ fn springs_and_constraints_reach_the_model() {
 #[test]
 fn modes_match_the_rust_api() {
     let _g = serial();
-    let (_, _, model) = channel();
+    let (_, _, _, model) = channel();
     let lens = [100.0, 1000.0];
     let m1 = vec![vec![1.0]; 2];
     let r = stripmain(&model, &lens, &m1, BoundaryCondition::SS, 1).unwrap();
@@ -362,7 +362,7 @@ fn modes_match_the_rust_api() {
     let per = 5 + 1 + 4 * 6;
     let mut out = vec![f64::MAX; 2 * per + 3];
     assert_eq!(
-        modes([1.5, 203e3, 0.3, 1.0, 0.0], "S-S", &lens, &mut out),
+        modes([1.0, 0.0, 1.0], "S-S", &lens, &mut out),
         (2 * per) as isize
     );
     for (i, row) in out[..2 * per].chunks_exact(per).enumerate() {
@@ -384,7 +384,9 @@ fn modes_match_the_rust_api() {
 #[test]
 fn modes_classify_an_angle_and_a_plate() {
     let _g = serial();
-    let params = [1.5, 203e3, 0.3, 1.0, 0.0];
+    let params = [1.0, 0.0, 1.0];
+    let mat = Material::isotropic(203e3, 0.3);
+    let mats = [mat.ex, mat.ey, mat.vx, mat.vy, mat.g];
     let lens = [30.0, 30_000.0];
     for pts in [
         &[(0.0, 150.0), (0.0, 0.0), (60.0, 0.0)][..],
@@ -392,17 +394,19 @@ fn modes_classify_an_angle_and_a_plate() {
     ] {
         let nodes: Vec<f64> = pts
             .iter()
-            .flat_map(|&(x, z)| [x, z, 1.0, 1.0, 1.0])
+            .flat_map(|&(x, z)| [x, z, 1.0, 1.0, 1.0, 1.0, 1.0])
             .collect();
         let elems: Vec<f64> = (0..pts.len() - 1)
-            .flat_map(|i| [i as f64, (i + 1) as f64])
+            .flat_map(|i| [i as f64, (i + 1) as f64, 1.5, 0.0])
             .collect();
         let per = 5 + 1 + 4 * pts.len();
         let mut out = vec![0.0; 2 * per];
         let n = unsafe {
             cufsm_modes(
                 params.as_ptr(),
-                5,
+                3,
+                mats.as_ptr(),
+                mats.len(),
                 nodes.as_ptr(),
                 nodes.len(),
                 elems.as_ptr(),
@@ -433,6 +437,151 @@ fn modes_classify_an_angle_and_a_plate() {
             );
         }
     }
+}
+
+#[test]
+fn per_element_thickness_and_orthotropy_reach_the_model() {
+    let _g = serial();
+    let (_, mut nodes, mut elems, mut model) = channel();
+    // web thicker, and an orthotropic second material on the flanges
+    let ortho = Material {
+        ex: 203e3,
+        ey: 150e3,
+        vx: 0.3,
+        vy: 0.3 * 150e3 / 203e3,
+        g: 70e3,
+    };
+    let iso = model.materials[0];
+    let mats = vec![
+        iso.ex, iso.ey, iso.vx, iso.vy, iso.g, ortho.ex, ortho.ey, ortho.vx, ortho.vy, ortho.g,
+    ];
+    elems[2 * 4 + 2] = 2.5; // element 2 (the web): t = 2.5
+    elems[4 + 3] = 1.0; // element 1: material 1
+    elems[3 * 4 + 3] = 1.0; // element 3: material 1
+    model.materials.push(ortho);
+    model.elements[2].t = 2.5;
+    model.elements[1].mat = 1;
+    model.elements[3].mat = 1;
+    // pin node 2's rotation and y through the new columns
+    nodes[2 * 7 + 4] = 0.0;
+    nodes[2 * 7 + 5] = 0.0;
+    model.nodes[2].free = [true, true, false, false];
+    let lens = [50.0, 300.0];
+    let mut out = vec![0.0; 4];
+    let n = unsafe {
+        cufsm_signature(
+            [1.0, 0.0, 1.0].as_ptr(),
+            3,
+            mats.as_ptr(),
+            mats.len(),
+            nodes.as_ptr(),
+            nodes.len(),
+            elems.as_ptr(),
+            elems.len(),
+            "S-S".as_ptr(),
+            3,
+            lens.as_ptr(),
+            2,
+            std::ptr::null(),
+            0,
+            std::ptr::null(),
+            0,
+            out.as_mut_ptr(),
+            out.len(),
+        )
+    };
+    assert_eq!(n, 4, "{}", last_error());
+    let want = stripmain(
+        &model,
+        &lens,
+        &[vec![1.0], vec![1.0]],
+        BoundaryCondition::SS,
+        1,
+    )
+    .unwrap();
+    for (row, r) in out.chunks(2).zip(&want) {
+        assert_eq!(row[1], r.load_factors[0]);
+    }
+}
+
+#[test]
+fn bad_model_buffers_fail_cleanly() {
+    let _g = serial();
+    let (mats, nodes, elems, _) = channel();
+    let run = |mats: &[f64], nodes: &[f64], elems: &[f64]| {
+        let mut out = vec![0.0; 2];
+        let n = unsafe {
+            cufsm_signature(
+                [1.0, 0.0, 1.0].as_ptr(),
+                3,
+                mats.as_ptr(),
+                mats.len(),
+                nodes.as_ptr(),
+                nodes.len(),
+                elems.as_ptr(),
+                elems.len(),
+                "S-S".as_ptr(),
+                3,
+                [100.0].as_ptr(),
+                1,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                out.as_mut_ptr(),
+                out.len(),
+            )
+        };
+        (n, last_error())
+    };
+    let mut e = elems.clone();
+    e[3] = 1.0; // element 0 refers to material 1; there is only material 0
+    assert!(
+        run(&mats, &nodes, &e).1.contains("material"),
+        "mat out of range"
+    );
+    let mut m = mats.clone();
+    m[2] = 1.1;
+    m[3] = 1.0; // vx * vy >= 1
+    assert!(run(&m, &nodes, &elems).1.contains("vx"), "vx*vy");
+    let mut e = elems.clone();
+    e[2] = 0.0; // t = 0
+    assert!(run(&mats, &nodes, &e).1.contains("thickness"), "t");
+    let mut nd = nodes.clone();
+    nd[4] = 0.5; // free_y not 0 or 1
+    assert!(run(&mats, &nd, &elems).1.contains("free flag"), "flag");
+    assert!(
+        run(&mats[..4], &nodes, &elems).1.contains("mats length"),
+        "mats stride"
+    );
+    assert!(
+        run(&mats, &nodes[..6], &elems).1.contains("nodes length"),
+        "nodes stride"
+    );
+    let mut out = vec![0.0; 2];
+    let n = unsafe {
+        cufsm_signature(
+            [1.0, 0.0, 99.0].as_ptr(),
+            3,
+            mats.as_ptr(),
+            mats.len(),
+            nodes.as_ptr(),
+            nodes.len(),
+            elems.as_ptr(),
+            elems.len(),
+            "S-S".as_ptr(),
+            3,
+            [100.0].as_ptr(),
+            1,
+            std::ptr::null(),
+            0,
+            std::ptr::null(),
+            0,
+            out.as_mut_ptr(),
+            out.len(),
+        )
+    };
+    assert!(n < 0 && last_error().contains("neigs"));
 }
 
 #[test]

@@ -11,9 +11,11 @@
 //!
 //! Layouts (all little-endian `f64` unless said otherwise):
 //!
-//! * `params`: `[t, E, nu, terms, spaces]`
-//! * `nodes`: 5 per node: `x, z, stress, free_x, free_z` (the last two 0 or 1)
-//! * `elems`: 2 per element: `node_i, node_j`; every element takes `t` from `params`
+//! * `params`: `[terms, spaces, neigs]`, with `neigs` from 1 to [`MAX_NEIGS`] (50)
+//! * `mats`: 5 per material: `ex, ey, vx, vy, g`; an element refers to a material by 0-based row
+//! * `nodes`: 7 per node, in CUFSM's column order: `x, z, free_x, free_z, free_y, free_q, stress`
+//!   (the four free flags 0 or 1)
+//! * `elems`: 4 per element: `node_i, node_j, t, mat`
 //! * `springs`: 9 per spring (0 for none): `node_i, node_j` (-1 for ground), `k_u, k_v, k_w, k_q`,
 //!   `local` (0 or 1), `discrete` (0 or 1), `ys_fraction` - CUFSM's `springs` row, v4.3 form
 //! * `constraints`: 5 per constraint (0 for none): `node_e, dof_e, coeff, node_k, dof_k`, with
@@ -56,14 +58,16 @@ use crate::cfsm::{self, stripmain_constrained, Spaces};
 use crate::model::{Constraint, Dof, Spring};
 use crate::{stripmain, BoundaryCondition, Element, Material, Model, Node};
 
-const N_PARAMS: usize = 5;
-const N_NODE: usize = 5;
-const N_ELEM: usize = 2;
+const N_PARAMS: usize = 3;
+const N_MAT: usize = 5;
+const N_NODE: usize = 7;
+const N_ELEM: usize = 4;
 const N_SPRING: usize = 9;
 const N_CONSTRAINT: usize = 5;
-const NEIGS: usize = 1;
 /// The most longitudinal terms accepted for a boundary condition other than S-S.
 pub const MAX_TERMS: usize = 100;
+/// The most eigenvalues kept per length.
+pub const MAX_NEIGS: usize = 50;
 
 static ERR_PTR: AtomicUsize = AtomicUsize::new(0);
 static ERR_LEN: AtomicUsize = AtomicUsize::new(0);
@@ -167,12 +171,123 @@ struct Input {
     lengths: Vec<f64>,
     m_all: Vec<Vec<f64>>,
     spaces: u32,
+    neigs: usize,
+}
+
+/// The model from its flat buffers: materials, 7-value nodes, 4-value elements, springs and
+/// constraints. Every stride is checked before anything is read.
+#[allow(clippy::too_many_arguments)]
+unsafe fn read_model(
+    mats: *const f64,
+    mats_len: usize,
+    nodes: *const f64,
+    nodes_len: usize,
+    elems: *const f64,
+    elems_len: usize,
+    springs: *const f64,
+    springs_len: usize,
+    constraints: *const f64,
+    constraints_len: usize,
+) -> Result<Model, String> {
+    if mats_len == 0 || mats_len % N_MAT != 0 {
+        return Err(format!(
+            "mats length {mats_len} is not a positive multiple of {N_MAT}"
+        ));
+    }
+    if nodes_len == 0 || nodes_len % N_NODE != 0 {
+        return Err(format!(
+            "nodes length {nodes_len} is not a positive multiple of {N_NODE}"
+        ));
+    }
+    if elems_len == 0 || elems_len % N_ELEM != 0 {
+        return Err(format!(
+            "elems length {elems_len} is not a positive multiple of {N_ELEM}"
+        ));
+    }
+    // SAFETY (these three): the caller guarantees each pointer is valid for its length.
+    let raw_mats = unsafe { input(mats, mats_len, "mats") }?;
+    let raw_nodes = unsafe { input(nodes, nodes_len, "nodes") }?;
+    let raw_elems = unsafe { input(elems, elems_len, "elems") }?;
+
+    let mut materials = Vec::with_capacity(mats_len / N_MAT);
+    for (k, c) in raw_mats.chunks_exact(N_MAT).enumerate() {
+        if !c.iter().all(|v| v.is_finite()) || c[0] <= 0.0 || c[1] <= 0.0 || c[4] <= 0.0 {
+            return Err(format!(
+                "material {k}: Ex, Ey and G must be positive finite numbers"
+            ));
+        }
+        if c[2] * c[3] >= 1.0 {
+            return Err(format!(
+                "material {k}: vx * vy must be below 1, got {}",
+                c[2] * c[3]
+            ));
+        }
+        materials.push(Material {
+            ex: c[0],
+            ey: c[1],
+            vx: c[2],
+            vy: c[3],
+            g: c[4],
+        });
+    }
+    let flag = |v: f64| {
+        if v == 0.0 || v == 1.0 {
+            Ok(v == 1.0)
+        } else {
+            Err(format!("a node's free flag must be 0 or 1, got {v}"))
+        }
+    };
+    let mut out_nodes = Vec::with_capacity(nodes_len / N_NODE);
+    for c in raw_nodes.chunks_exact(N_NODE) {
+        if !(c[0].is_finite() && c[1].is_finite() && c[6].is_finite()) {
+            return Err("a node coordinate or stress is not finite".into());
+        }
+        let mut n = Node::new(c[0], c[1], c[6]);
+        n.free = [flag(c[2])?, flag(c[3])?, flag(c[4])?, flag(c[5])?];
+        out_nodes.push(n);
+    }
+    let n_nodes = out_nodes.len();
+    let mut out_elems = Vec::with_capacity(elems_len / N_ELEM);
+    for (k, c) in raw_elems.chunks_exact(N_ELEM).enumerate() {
+        if !(c[2].is_finite() && c[2] > 0.0) {
+            return Err(format!(
+                "element {k}: thickness must be a positive finite number"
+            ));
+        }
+        out_elems.push(Element {
+            ni: whole(c[0], 0, n_nodes - 1, "an element's node_i")?,
+            nj: whole(c[1], 0, n_nodes - 1, "an element's node_j")?,
+            t: c[2],
+            mat: whole(c[3], 0, materials.len() - 1, "an element's material")?,
+        });
+    }
+    let springs_raw = if springs_len == 0 {
+        &[][..]
+    } else {
+        unsafe { input(springs, springs_len, "springs") }?
+    };
+    let constraints_raw = if constraints_len == 0 {
+        &[][..]
+    } else {
+        unsafe { input(constraints, constraints_len, "constraints") }?
+    };
+    let model = Model {
+        materials,
+        nodes: out_nodes,
+        elements: out_elems,
+        constraints: read_constraints(constraints_raw, n_nodes)?,
+        springs: read_springs(springs_raw, n_nodes)?,
+    };
+    model.validate().map_err(|err| err.to_string())?;
+    Ok(model)
 }
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn read_input(
     params: *const f64,
     params_len: usize,
+    mats: *const f64,
+    mats_len: usize,
     nodes: *const f64,
     nodes_len: usize,
     elems: *const f64,
@@ -189,38 +304,15 @@ unsafe fn read_input(
     if params_len < N_PARAMS {
         return Err(format!("params needs {N_PARAMS} values, got {params_len}"));
     }
-    if nodes_len == 0 || nodes_len % N_NODE != 0 {
-        return Err(format!(
-            "nodes length {nodes_len} is not a positive multiple of {N_NODE}"
-        ));
-    }
-    if elems_len == 0 || elems_len % N_ELEM != 0 {
-        return Err(format!(
-            "elems length {elems_len} is not a positive multiple of {N_ELEM}"
-        ));
-    }
     if lengths_len == 0 {
         return Err("no lengths given".into());
     }
-    // SAFETY (this and the three below): the caller guarantees each pointer is valid for its length.
+    // SAFETY (this and the one below): the caller guarantees each pointer is valid for its length.
     let p = unsafe { input(params, N_PARAMS, "params") }?;
-    let raw_nodes = unsafe { input(nodes, nodes_len, "nodes") }?;
-    let raw_elems = unsafe { input(elems, elems_len, "elems") }?;
     let lens = unsafe { input(lengths, lengths_len, "lengths") }?;
-
-    let (t, e, nu) = (p[0], p[1], p[2]);
-    if !(t.is_finite() && t > 0.0) {
-        return Err("thickness must be a positive finite number".into());
-    }
-    if !(e.is_finite() && e > 0.0) {
-        return Err("Young's modulus must be a positive finite number".into());
-    }
-    if !(nu.is_finite() && nu > -1.0 && nu < 0.5) {
-        return Err(format!(
-            "Poisson's ratio must be between -1 and 0.5, got {nu}"
-        ));
-    }
-    let spaces = whole(p[4], 0, 15, "spaces")? as u32;
+    let terms = p[0];
+    let spaces = whole(p[1], 0, 15, "spaces")? as u32;
+    let neigs = whole(p[2], 1, MAX_NEIGS, "neigs")?;
     if lens.iter().any(|l| !(l.is_finite() && *l > 0.0)) {
         return Err("a length is not a positive finite number".into());
     }
@@ -234,58 +326,31 @@ unsafe fn read_input(
     let bc =
         BoundaryCondition::parse(s).ok_or_else(|| format!("unknown boundary condition {s:?}"))?;
     let terms = if bc == BoundaryCondition::SS {
-        if p[3] != 1.0 {
+        if terms != 1.0 {
             return Err(format!(
-                "S-S is the signature curve, which takes the single term m = 1 at each half-wavelength; terms must be 1, got {}",
-                p[3]
+                "S-S is the signature curve, which takes the single term m = 1 at each half-wavelength; terms must be 1, got {terms}"
             ));
         }
         1
     } else {
-        whole(p[3], 1, MAX_TERMS, "terms")?
+        whole(terms, 1, MAX_TERMS, "terms")?
     };
 
-    let mut out_nodes = Vec::with_capacity(nodes_len / N_NODE);
-    for c in raw_nodes.chunks_exact(N_NODE) {
-        if !c[..3].iter().all(|v| v.is_finite()) {
-            return Err("a node coordinate or stress is not finite".into());
-        }
-        let flag = |v: f64| {
-            if v == 0.0 || v == 1.0 {
-                Ok(v == 1.0)
-            } else {
-                Err(format!("a node's free flag must be 0 or 1, got {v}"))
-            }
-        };
-        let mut n = Node::new(c[0], c[1], c[2]);
-        n.free = [flag(c[3])?, flag(c[4])?, true, true];
-        out_nodes.push(n);
-    }
-    let n_nodes = out_nodes.len();
-    let mut out_elems = Vec::with_capacity(elems_len / N_ELEM);
-    for c in raw_elems.chunks_exact(N_ELEM) {
-        let ni = whole(c[0], 0, n_nodes - 1, "an element's node_i")?;
-        let nj = whole(c[1], 0, n_nodes - 1, "an element's node_j")?;
-        out_elems.push(Element { ni, nj, t, mat: 0 });
-    }
-    let springs_raw = if springs_len == 0 {
-        &[][..]
-    } else {
-        unsafe { input(springs, springs_len, "springs") }?
-    };
-    let constraints_raw = if constraints_len == 0 {
-        &[][..]
-    } else {
-        unsafe { input(constraints, constraints_len, "constraints") }?
-    };
-    let model = Model {
-        materials: vec![Material::isotropic(e, nu)],
-        nodes: out_nodes,
-        elements: out_elems,
-        constraints: read_constraints(constraints_raw, n_nodes)?,
-        springs: read_springs(springs_raw, n_nodes)?,
-    };
-    model.validate().map_err(|err| err.to_string())?;
+    // SAFETY: the export's contract: every pointer valid for its length.
+    let model = unsafe {
+        read_model(
+            mats,
+            mats_len,
+            nodes,
+            nodes_len,
+            elems,
+            elems_len,
+            springs,
+            springs_len,
+            constraints,
+            constraints_len,
+        )
+    }?;
     let m: Vec<f64> = (1..=terms).map(|k| k as f64).collect();
     Ok(Input {
         model,
@@ -293,6 +358,7 @@ unsafe fn read_input(
         m_all: vec![m; lens.len()],
         lengths: lens.to_vec(),
         spaces,
+        neigs,
     })
 }
 
@@ -392,7 +458,7 @@ fn first_lf(r: &crate::LengthResult) -> f64 {
 }
 
 /// The curve at the caller's lengths: always the free analysis, plus one column per space
-/// asked for in `params[4]` from `stripmain_constrained`. See the module docs for the layouts.
+/// asked for in `params[1]` from `stripmain_constrained`. See the module docs for the layouts.
 ///
 /// # Safety
 /// Every pointer must be valid for its length.
@@ -400,6 +466,8 @@ fn first_lf(r: &crate::LengthResult) -> f64 {
 pub unsafe extern "C" fn cufsm_signature(
     params: *const f64,
     params_len: usize,
+    mats: *const f64,
+    mats_len: usize,
     nodes: *const f64,
     nodes_len: usize,
     elems: *const f64,
@@ -421,6 +489,8 @@ pub unsafe extern "C" fn cufsm_signature(
             read_input(
                 params,
                 params_len,
+                mats,
+                mats_len,
                 nodes,
                 nodes_len,
                 elems,
@@ -439,7 +509,7 @@ pub unsafe extern "C" fn cufsm_signature(
         // SAFETY: the export's contract: `out` valid for `out_cap` values.
         let buf = unsafe { output(out, out_cap, i.lengths.len() * stride) }?;
         let free =
-            stripmain(&i.model, &i.lengths, &i.m_all, i.bc, NEIGS).map_err(|e| e.to_string())?;
+            stripmain(&i.model, &i.lengths, &i.m_all, i.bc, i.neigs).map_err(|e| e.to_string())?;
         for (row, r) in buf.chunks_exact_mut(stride).zip(&free) {
             row[0] = r.length;
             row[1] = first_lf(r);
@@ -455,7 +525,7 @@ pub unsafe extern "C" fn cufsm_signature(
                 local: bit == 4,
                 other: bit == 8,
             };
-            let run = stripmain_constrained(&i.model, &i.lengths, &i.m_all, i.bc, NEIGS, sp)
+            let run = stripmain_constrained(&i.model, &i.lengths, &i.m_all, i.bc, i.neigs, sp)
                 .map_err(|e| e.to_string())?;
             for (row, r) in buf.chunks_exact_mut(stride).zip(&run) {
                 row[col] = first_lf(r);
@@ -475,6 +545,8 @@ pub unsafe extern "C" fn cufsm_signature(
 pub unsafe extern "C" fn cufsm_modes(
     params: *const f64,
     params_len: usize,
+    mats: *const f64,
+    mats_len: usize,
     nodes: *const f64,
     nodes_len: usize,
     elems: *const f64,
@@ -496,6 +568,8 @@ pub unsafe extern "C" fn cufsm_modes(
             read_input(
                 params,
                 params_len,
+                mats,
+                mats_len,
                 nodes,
                 nodes_len,
                 elems,
@@ -516,7 +590,7 @@ pub unsafe extern "C" fn cufsm_modes(
         // SAFETY: the export's contract: `out` valid for `out_cap` values.
         let buf = unsafe { output(out, out_cap, i.lengths.len() * per) }?;
         let results =
-            stripmain(&i.model, &i.lengths, &i.m_all, i.bc, NEIGS).map_err(|e| e.to_string())?;
+            stripmain(&i.model, &i.lengths, &i.m_all, i.bc, i.neigs).map_err(|e| e.to_string())?;
         let classes = cfsm::classify(
             &i.model,
             &results,
