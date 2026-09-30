@@ -887,3 +887,8 @@ fn alloc_round_trips() {
     }
     unsafe { cufsm_dealloc(std::ptr::null_mut(), 8) };
 }
+
+#[test]
+fn abi_is_2() {
+    assert_eq!(cufsm_abi_version(), 2);
+}

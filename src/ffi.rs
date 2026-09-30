@@ -154,6 +154,13 @@ pub extern "C" fn cufsm_last_error_len() -> usize {
     ERR_LEN.load(Ordering::Relaxed)
 }
 
+/// The buffer layouts' version. 2 = materials buffer, 7-value nodes, 4-value elements,
+/// `[terms, spaces, neigs]` params, multi-mode `cufsm_modes`, and the section exports.
+#[no_mangle]
+pub extern "C" fn cufsm_abi_version() -> u32 {
+    2
+}
+
 /// `len` values at `p`, refusing a null pointer (reading through one is undefined behaviour).
 unsafe fn input<'a>(p: *const f64, len: usize, what: &str) -> Result<&'a [f64], String> {
     if p.is_null() {

@@ -78,16 +78,26 @@ as a WebAssembly module that JavaScript can call directly, without a binding lib
 cargo rustc --release --lib --features ffi --crate-type cdylib --target wasm32-unknown-unknown
 ```
 
-The module has two functions:
+The module's functions:
 
+- `cufsm_abi_version` returns the buffer layout version, currently 2. A page should refuse a
+  module whose version is not the one it was built for.
 - `cufsm_signature` returns the buckling load factor at each length. It can also return the
   load factors restricted to the G, D, L and O spaces.
-- `cufsm_modes` returns the lowest mode at each length, with its G, D, L and O percentages.
+- `cufsm_modes` returns up to `neigs` modes at each length, each with its load factor and its
+  G, D, L and O percentages.
+- `cufsm_props` returns the gross and warping section properties.
+- `cufsm_stresgen` turns member actions (including a bimoment) into reference stresses.
+- `cufsm_yield` returns the first-yield actions, at the midline or at the element faces, and
+  the bimoment yield.
+- `cufsm_stress_to_action` fits member actions to a set of nodal stresses.
+- `cufsm_ftm` runs the finite tube method on one tube.
 
-Inputs and outputs are arrays of numbers in the module's memory. `src/ffi.rs` describes their
-layout. For S-S, the lengths are half-wavelengths and there must be one longitudinal term,
-because that is what defines the signature curve. For the other end conditions, the lengths are
-member lengths and any number of terms can be used.
+Inputs and outputs are arrays of numbers in the module's memory: materials (5 values each),
+nodes (7 each: x, z, the four free flags, stress), elements (4 each: the two nodes, thickness,
+material). `src/ffi.rs` describes the layouts in full. For S-S, the lengths are half-wavelengths
+and there must be one longitudinal term, because that is what defines the signature curve. For
+the other end conditions, the lengths are member lengths and any number of terms can be used.
 
 A crate that depends on cufsm-rs does not get these functions unless it turns the feature on.
 
