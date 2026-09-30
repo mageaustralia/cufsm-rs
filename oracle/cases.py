@@ -93,6 +93,10 @@ pl_node, pl_elem = polyline([(0, 0), (100, 0)], 2.0, 10)
 cases.append(signature("ss plate compression", {"node": pl_node, "elem": pl_elem}, actions(P=1000.0),
                        lmin=20, lmax=1000, fix=[[1, 5], [len(pl_node), 5]]))
 
+# The same plate free at its long edges: no warping, no Ixx, so no bimoment yield.
+fp_node, fp_elem = polyline([(0, 0), (100, 0)], 2.0, 8)
+cases.append(signature("flat plate compression", {"node": fp_node, "elem": fp_elem}, actions(P=1000.0)))
+
 # General end conditions with several longitudinal terms, on a small lipped C so the global
 # matrices are carried too (4 x 11 nodes x terms <= 400 DOF).
 small = {"template": template(1, 150, 60, 60, 15, 15, 0, 1.5, nh=4, nb=2, nd=1)}

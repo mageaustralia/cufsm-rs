@@ -300,6 +300,20 @@ for c = 1:numel(cases)
   [Py, Mxx_y, Mzz_y, M11_y, M22_y] = yieldMP(node, 345, A, xcg, zcg, Ixx, Izz, Ixz, thetap, I11, I22, ac.unsymm);
   r.yield = struct('fy', 345, 'Py', Py, 'Mxx', Mxx_y, 'Mzz', Mzz_y, 'M11', M11_y, 'M22', M22_y);
   r.props = struct('A', A, 'xcg', xcg, 'zcg', zcg, 'Ixx', Ixx, 'Izz', Izz, 'Ixz', Ixz, 'thetap', thetap, 'I11', I11, 'I22', I22);
+  % Current CUFSM (June 2026) first yield at the element faces, and the bimoment yield.
+  [Py_e, Mxx_e, Mzz_e, M11_e, M22_e] = yieldMP_extfiber(node, elem, 345, A, xcg, zcg, Ixx, Izz, Ixz, thetap, I11, I22, ac.unsymm);
+  [~, ~, ~, ~, ~, ~, ~, ~, ~, ~, ~, ~, Cw_w, ~, ~, w_w] = cutwp_prop2(node(:, 2:3), elem(:, 2:4));
+  By_e = yieldB(345, Cw_w, w_w);
+  r.yield_ext = struct('fy', 345, 'Py', Py_e, 'Mxx', Mxx_e, 'Mzz', Mzz_e, 'M11', M11_e, 'M22', M22_e, 'B', By_e);
+  % A bimoment on top of the case's reference stresses, as loading_cb case 1 applies it.
+  Bref = 1e6;
+  bnode = warp_stress(node, [100 E E nu nu E/(2*(1+nu))], 1, 0, Bref, 0, 0, Cw_w, 0, w_w, 0);
+  r.warp = struct('B', Bref, 'stress', bnode(:, 8)');
+  % Generate from Stress: the actions that best reproduce those stresses.
+  [P_s, M11_s, M22_s, B_s, err_s] = stress_to_action(bnode, xcg, zcg, thetap, A, I11, I22, w_w, Cw_w);
+  r.s2a = struct('P', P_s, 'M11', M11_s, 'M22', M22_s, 'B', B_s, 'err', err_s);
+  [~, sha] = system(['git -C "' root '" rev-parse --short HEAD']);
+  r.cufsm_commit = strtrim(sha);
   r.bc = BC;
   r.lengths = lengths;
   r.m_all = m_all;
