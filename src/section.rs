@@ -238,14 +238,15 @@ pub fn yield_mp_extfiber(
 }
 
 /// The bimoment that first yields the section, CUFSM `yieldB.m`: `fy` over the peak `|w / Cw|`.
-/// A section with no warping (a flat plate, `Cw = 0`) gives 0, as CUFSM's NaN trap does.
+/// A section with no warping (a flat plate, `Cw = 0`) gives 0, as CUFSM's NaN trap does, and it
+/// is a positive zero: `fy / -inf` would otherwise be `-0.0`.
 pub fn yield_b(fy: f64, cw: f64, wn: &[f64]) -> f64 {
     let peak = wn
         .iter()
         .map(|w| (w / cw).abs())
         .fold(f64::NEG_INFINITY, f64::max);
     let by = fy / peak;
-    if by.is_finite() {
+    if by.is_finite() && by > 0.0 {
         by
     } else {
         0.0

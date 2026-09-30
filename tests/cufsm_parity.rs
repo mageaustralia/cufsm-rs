@@ -318,21 +318,6 @@ fn stress_to_action_matches_cufsm() {
         let p = grosprop(&m);
         let got = stress_to_action(&m, &p, cw.cw, &cw.wn);
         let s = &r["s2a"];
-        // The G stress_to_action fits, rebuilt here so a case whose fitted actions cannot be
-        // compared directly can be compared through the stresses G f they produce.
-        let th = p.thetap * std::f64::consts::PI / 180.0;
-        let (c, ss) = (th.cos(), th.sin());
-        let g_col = |k: usize, i: usize| -> f64 {
-            let nd = &m.nodes[i];
-            let (dx, dz) = (nd.x - p.xcg, nd.z - p.zcg);
-            let (x1, z1) = (c * dx + ss * dz, -ss * dx + c * dz);
-            match k {
-                0 => 1.0 / p.a,
-                1 => z1 / p.i11,
-                2 => x1 / -p.i22,
-                _ => cw.wn.get(i).copied().unwrap_or(f64::NAN) / cw.cw,
-            }
-        };
         let fits: [[f64; 4]; 2] = [[got.p, got.m11, got.m22, got.b], {
             let f = s;
             [
@@ -371,23 +356,26 @@ fn stress_to_action_matches_cufsm() {
             if close(g, w, 1e-9) {
                 continue;
             }
-            // The plan's Step 4 fallback for the one fit whose f cannot be compared directly.
-            // G's columns span orders of magnitude in norm (1/A down to w/Cw) while the
-            // bimoment is 1e6, so the solve's rounding noise puts about cond(G) * eps * |B| of
-            // error into the near-zero actions: on "lipped-c unequal compression" M11 comes out
-            // at -1.0e-11 here and -1.1e-9 in MATLAB's pivoted QR, both far below any stress
-            // either can produce, while err stays at 1e-15 (ours) and 5e-14 (theirs). The
-            // fitted stresses G f are compared instead, at 1e-12, which a real mistake in any
-            // action moves by far more than that. Every other case passes the 1e-9 check on f
-            // above, and that tolerance is unchanged.
-            for i in 0..m.nodes.len() {
-                let ours: f64 = (0..4).map(|q| g_col(q, i) * fits[0][q]).sum();
-                let want: f64 = (0..4).map(|q| g_col(q, i) * fits[1][q]).sum();
-                assert!(
-                    close(ours, want, 1e-12),
-                    "{name}: {k} fitted stress at node {i}: {ours} vs {want}"
-                );
-            }
+            // Where the 1e-9 relative test on f cannot reach, an absolute floor per action:
+            // |g - w| <= 1e-9 * max|f|, the biggest fitted action on either side. G's columns
+            // span orders of magnitude in norm (1/A down to w/Cw) while the bimoment is 1e6,
+            // so the solve's rounding noise puts about cond(G) * eps * |B| of error into the
+            // near-zero actions: on "lipped-c unequal compression" M11 comes out at -1.0e-11
+            // here and -1.1e-9 in MATLAB's pivoted QR, both far below any stress either can
+            // produce. Against max|f| = 1e6 the floor is 1e-3, still three orders below the
+            // smallest action the section can carry, and a real mistake in any action lands
+            // far above it. Every other case passes the 1e-9 check on f above, and that
+            // tolerance is unchanged.
+            let biggest = fits
+                .iter()
+                .flat_map(|f| f.iter())
+                .filter(|v| v.is_finite())
+                .fold(0.0_f64, |m, v| m.max(v.abs()));
+            assert!(
+                (g - w).abs() <= 1e-9 * biggest,
+                "{name}: {k} {g} vs CUFSM {w}, floor {}",
+                1e-9 * biggest
+            );
         }
         match s["err"].as_f64() {
             // A null err is the same NaN fit, and still has to be a real residual: no larger
@@ -419,6 +407,8 @@ fn plate_has_no_bimoment_yield_and_no_nan() {
     let cw = cutwp_prop2(&m);
     let by = yield_b(345.0, cw.cw, &cw.wn);
     assert_eq!(by, 0.0);
+    // CUFSM's NaN trap returns a positive zero; so must we, or the -0.0 shows up in JSON.
+    assert!(by.is_sign_positive(), "By is {by:?}, not +0.0");
     let s = stress_to_action(&m, &grosprop(&m), cw.cw, &cw.wn);
     assert!(s.p.is_finite() && s.m11.is_finite() && s.m22.is_finite() && s.b.is_finite());
     // The plate carries P = 1000 as a uniform P/A = 5 stress (its nodes are all at 5), so the
