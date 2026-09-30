@@ -282,6 +282,14 @@ pub struct StressActions {
 /// CUFSM `stress_to_action.m`: the least-squares `P, M11, M22, B` whose stresses best match the
 /// model's nodal stresses. A column the section cannot carry (non-finite, as `1/I22` for a flat
 /// plate or `w/Cw` with no warping) is left out and its action reported as 0.
+///
+/// Divergence from CUFSM, deliberate: `stress_to_action.m` has no NaN trap, so one column it
+/// cannot form makes its `f = G\s` return NaN for every action, not just that one. A flat plate
+/// therefore comes back from CUFSM as NaN for P as well as for B, even though it carries P
+/// perfectly well. Dropping the offending column keeps the rest of the fit honest: the carried
+/// actions take their true values, only the uncarryable one reads 0, and `err` is the residual of
+/// the reduced fit. `yieldB` and `warp_stress` do trap this NaN in CUFSM itself, so [`yield_b`]
+/// and [`add_bimoment_stress`] agree with it exactly instead of diverging.
 pub fn stress_to_action(
     model: &Model,
     props: &GrossProperties,

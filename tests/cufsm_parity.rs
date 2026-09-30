@@ -342,10 +342,6 @@ fn stress_to_action_matches_cufsm() {
                 f["B"].as_f64().unwrap_or(f64::NAN),
             ]
         }];
-        let biggest = fits[0]
-            .iter()
-            .chain(fits[1].iter())
-            .fold(0.0_f64, |m, v| m.max(v.abs()));
         for (k, g) in [
             ("P", got.p),
             ("M11", got.m11),
@@ -355,31 +351,35 @@ fn stress_to_action_matches_cufsm() {
             let Some(w) = s[k].as_f64() else {
                 // The oracle pins nothing for this case: CUFSM's stress_to_action.m has no NaN
                 // trap, so when Cw = 0 its G(:,4) = w/Cw column is NaN and f = G\s comes back
-                // NaN for the whole fit, which jsonencode writes as null. We drop the column
-                // instead, so every action stays finite, and B is exactly 0 because the section
-                // cannot carry it (Cw = 0).
+                // NaN for the whole fit, which jsonencode writes as null. The case is not
+                // skipped and the tolerance is not relaxed: we drop the column instead, so
+                // every action stays finite, B is exactly 0 because the section cannot carry
+                // it, and P still comes back as the action that was applied to it.
                 assert!(g.is_finite(), "{name}: {k} {g}");
                 if k == "B" {
                     assert_eq!(g, 0.0, "{name}: B is 0 when Cw = 0");
+                }
+                if k == "P" {
+                    let applied = r["actions"]["P"].as_f64().unwrap_or(0.0);
+                    assert!(
+                        close(g, applied, 1e-9),
+                        "{name}: P {g} vs the applied {applied}"
+                    );
                 }
                 continue;
             };
             if close(g, w, 1e-9) {
                 continue;
             }
-            // The plan's fallback for a fit whose f cannot be compared directly. G's columns
-            // span orders of magnitude in norm (1/A down to w/Cw) while the bimoment is 1e6,
-            // so the solve's rounding noise puts about cond(G) * eps * |B| of error into the
-            // near-zero actions: on "lipped-c unequal compression" M11 comes out at -1.0e-11
-            // here and -1.1e-9 in MATLAB's pivoted QR, both far below any stress either can
-            // produce, while err stays at 1e-15 (ours) and 5e-14 (theirs). Both values must
-            // then sit at that floor (a real mistake in a dominant action still fails), and
-            // the fitted stresses G f are compared instead of f. The 1e-9 tolerance on f is
-            // unchanged for every other case.
-            assert!(
-                g.abs() <= 1e-5 * biggest && w.abs() <= 1e-5 * biggest,
-                "{name}: {k} {g} vs CUFSM {w} differ past the fit's noise floor {biggest}"
-            );
+            // The plan's Step 4 fallback for the one fit whose f cannot be compared directly.
+            // G's columns span orders of magnitude in norm (1/A down to w/Cw) while the
+            // bimoment is 1e6, so the solve's rounding noise puts about cond(G) * eps * |B| of
+            // error into the near-zero actions: on "lipped-c unequal compression" M11 comes out
+            // at -1.0e-11 here and -1.1e-9 in MATLAB's pivoted QR, both far below any stress
+            // either can produce, while err stays at 1e-15 (ours) and 5e-14 (theirs). The
+            // fitted stresses G f are compared instead, at 1e-12, which a real mistake in any
+            // action moves by far more than that. Every other case passes the 1e-9 check on f
+            // above, and that tolerance is unchanged.
             for i in 0..m.nodes.len() {
                 let ours: f64 = (0..4).map(|q| g_col(q, i) * fits[0][q]).sum();
                 let want: f64 = (0..4).map(|q| g_col(q, i) * fits[1][q]).sum();
@@ -390,8 +390,16 @@ fn stress_to_action_matches_cufsm() {
             }
         }
         match s["err"].as_f64() {
-            // A null err is the same NaN fit: it pins nothing, ours must just be finite.
-            None => assert!(got.err.is_finite(), "{name}: err {}", got.err),
+            // A null err is the same NaN fit, and still has to be a real residual: no larger
+            // than 1e-9 of the biggest stress it is measured against.
+            None => {
+                let max_sigma = m.nodes.iter().map(|n| n.stress.abs()).fold(0.0, f64::max);
+                assert!(
+                    got.err.is_finite() && got.err <= 1e-9 * max_sigma,
+                    "{name}: err {} over max stress {max_sigma}",
+                    got.err
+                );
+            }
             Some(w) => assert!(
                 got.err <= w * (1.0 + 1e-6) + 1e-9,
                 "{name}: err {}",
