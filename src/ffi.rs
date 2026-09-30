@@ -11,7 +11,9 @@
 //!
 //! Layouts (all little-endian `f64` unless said otherwise):
 //!
-//! * `params`: `[terms, spaces, neigs]`, with `neigs` from 1 to [`MAX_NEIGS`] (50)
+//! * `params`: `[terms, spaces, neigs]`, with `neigs` from 1 to [`MAX_NEIGS`] (50). `neigs` is
+//!   checked for both exports but only `cufsm_modes` uses it: `cufsm_signature` reports the lowest
+//!   mode, so it solves for one.
 //! * `mats`: 5 per material: `ex, ey, vx, vy, g`; an element refers to a material by 0-based row
 //! * `nodes`: 7 per node, in CUFSM's column order: `x, z, free_x, free_z, free_y, free_q, stress`
 //!   (the four free flags 0 or 1)
@@ -527,7 +529,9 @@ pub unsafe extern "C" fn cufsm_signature(
         // SAFETY: the export's contract: `out` valid for `out_cap` values.
         let buf = unsafe { output(out, out_cap, i.lengths.len() * stride) }?;
         let free =
-            stripmain(&i.model, &i.lengths, &i.m_all, i.bc, i.neigs).map_err(|e| e.to_string())?;
+            // One mode per length: the curve reports only the lowest, so neigs (for cufsm_modes)
+            // would only multiply the eigen work here.
+            stripmain(&i.model, &i.lengths, &i.m_all, i.bc, 1).map_err(|e| e.to_string())?;
         for (row, r) in buf.chunks_exact_mut(stride).zip(&free) {
             row[0] = r.length;
             row[1] = first_lf(r);
@@ -543,7 +547,7 @@ pub unsafe extern "C" fn cufsm_signature(
                 local: bit == 4,
                 other: bit == 8,
             };
-            let run = stripmain_constrained(&i.model, &i.lengths, &i.m_all, i.bc, i.neigs, sp)
+            let run = stripmain_constrained(&i.model, &i.lengths, &i.m_all, i.bc, 1, sp)
                 .map_err(|e| e.to_string())?;
             for (row, r) in buf.chunks_exact_mut(stride).zip(&run) {
                 row[col] = first_lf(r);

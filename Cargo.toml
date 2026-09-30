@@ -28,3 +28,8 @@ serde_json = "1"
 
 [profile.test]
 opt-level = 3
+
+# The wasm the GUI ships carries no symbol names (about 50 KB less); a native release build
+# still reports panic messages and locations.
+[profile.release]
+strip = true

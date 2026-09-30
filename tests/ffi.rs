@@ -157,6 +157,19 @@ fn signature_rows_match_the_rust_api() {
 
 /// S-S with more than one term would be the curve's minimum over L, L/2, ..., not the signature
 /// curve: refused, as are terms out of range for the other boundary conditions.
+/// The curve reports only the lowest mode, so neigs doesn't change it (and isn't paid for).
+#[test]
+fn signature_ignores_neigs() {
+    let _g = serial();
+    let mut one = vec![0.0; 30];
+    let mut many = vec![0.0; 30];
+    assert_eq!(signature([1.0, 7.0, 1.0], "S-S", &LENS, &mut one), 30);
+    assert_eq!(signature([1.0, 7.0, 20.0], "S-S", &LENS, &mut many), 30);
+    for (a, b) in one.iter().zip(&many) {
+        assert!((a - b).abs() <= 1e-12 * a.abs().max(1.0), "{a} vs {b}");
+    }
+}
+
 #[test]
 fn terms_are_checked() {
     let _g = serial();

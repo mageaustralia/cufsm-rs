@@ -254,8 +254,10 @@ pub fn yield_b(fy: f64, cw: f64, wn: &[f64]) -> f64 {
 }
 
 /// Adds the warping stress of a bimoment `b` to every node, CUFSM `warp_stress.m` with
-/// `Tflag = 1`: `b * w / Cw`. If any node's increment is NaN, none is added.
+/// `Tflag = 1`: `b * w / Cw`. If any node's increment is NaN, none is added. `wn` holds one
+/// warping value per node, as [`crate::cutwp_prop2`] returns them.
 pub fn add_bimoment_stress(model: &mut Model, b: f64, cw: f64, wn: &[f64]) {
+    debug_assert_eq!(wn.len(), model.nodes.len(), "one warping value per node");
     let inc: Vec<f64> = wn.iter().map(|w| b * w / cw).collect();
     if inc.iter().any(|v| v.is_nan()) {
         return;
@@ -291,12 +293,17 @@ pub struct StressActions {
 /// actions take their true values, only the uncarryable one reads 0, and `err` is the residual of
 /// the reduced fit. `yieldB` and `warp_stress` do trap this NaN in CUFSM itself, so [`yield_b`]
 /// and [`add_bimoment_stress`] agree with it exactly instead of diverging.
+///
+/// `wn` holds one warping value per node, as [`crate::cutwp_prop2`] returns them. A column that is
+/// numerically dependent on the ones before it (to `n * eps` of its norm) is dropped in the same
+/// way, with its action 0: see the least-squares note in the source.
 pub fn stress_to_action(
     model: &Model,
     props: &GrossProperties,
     cw: f64,
     wn: &[f64],
 ) -> StressActions {
+    debug_assert_eq!(wn.len(), model.nodes.len(), "one warping value per node");
     let th = props.thetap * PI / 180.0;
     let (c, s) = (th.cos(), th.sin());
     let n = model.nodes.len();
@@ -338,44 +345,53 @@ pub fn stress_to_action(
 }
 
 /// Least squares `min |G f - s|` for a tall, thin `G` given by columns, by Householder QR.
+///
+/// Rank-revealing without pivoting: a column whose part outside the span of the columns before it
+/// is below `n * eps` of its own norm is numerically dependent on them. It gets no pivot row and
+/// its coefficient is 0, and the remaining columns keep an exact triangular solve over their own
+/// pivot rows. (MATLAB's `G\s` on a rank-deficient `G` likewise returns a basic solution with
+/// zeros; it picks which column to drop by pivoting, this keeps the earlier column.)
 fn least_squares(cols: &[Vec<f64>], s: &[f64]) -> Vec<f64> {
     let k = cols.len();
-    if k == 0 {
-        return vec![];
-    }
     let n = s.len();
     let mut a: Vec<Vec<f64>> = cols.to_vec(); // a[j][i]: column j, row i
     let mut b = s.to_vec();
+    let mut pivot: Vec<Option<usize>> = vec![None; k]; // the row each kept column's R entry sits in
+    let mut r = 0; // the next free pivot row
     for j in 0..k {
-        let norm = (j..n).map(|i| a[j][i] * a[j][i]).sum::<f64>().sqrt();
-        if norm == 0.0 {
-            continue;
+        if r >= n {
+            break;
         }
-        let alpha = if a[j][j] > 0.0 { -norm } else { norm };
-        let mut v: Vec<f64> = (0..n).map(|i| if i < j { 0.0 } else { a[j][i] }).collect();
-        v[j] -= alpha;
+        let own = a[j].iter().map(|x| x * x).sum::<f64>().sqrt();
+        let norm = (r..n).map(|i| a[j][i] * a[j][i]).sum::<f64>().sqrt();
+        if norm <= n as f64 * f64::EPSILON * own {
+            continue; // zero, or dependent on the columns already kept
+        }
+        let alpha = if a[j][r] > 0.0 { -norm } else { norm };
+        let mut v: Vec<f64> = (0..n).map(|i| if i < r { 0.0 } else { a[j][i] }).collect();
+        v[r] -= alpha;
         let vv: f64 = v.iter().map(|x| x * x).sum();
-        if vv == 0.0 {
-            continue;
-        }
         for col in a.iter_mut().skip(j) {
-            let d: f64 = (j..n).map(|i| v[i] * col[i]).sum::<f64>() * 2.0 / vv;
-            for i in j..n {
+            let d: f64 = (r..n).map(|i| v[i] * col[i]).sum::<f64>() * 2.0 / vv;
+            for i in r..n {
                 col[i] -= d * v[i];
             }
         }
-        let d: f64 = (j..n).map(|i| v[i] * b[i]).sum::<f64>() * 2.0 / vv;
-        for i in j..n {
+        let d: f64 = (r..n).map(|i| v[i] * b[i]).sum::<f64>() * 2.0 / vv;
+        for i in r..n {
             b[i] -= d * v[i];
         }
+        pivot[j] = Some(r);
+        r += 1;
     }
     let mut f = vec![0.0; k];
     for j in (0..k).rev() {
-        let mut acc = b[j];
+        let Some(row) = pivot[j] else { continue };
+        let mut acc = b[row];
         for m in j + 1..k {
-            acc -= a[m][j] * f[m];
+            acc -= a[m][row] * f[m];
         }
-        f[j] = if a[j][j] != 0.0 { acc / a[j][j] } else { 0.0 };
+        f[j] = acc / a[j][row];
     }
     f
 }
@@ -417,5 +433,34 @@ mod tests {
         assert!((p.xcg - 50.0).abs() < 1e-12);
         assert!((p.izz - 2.0 * 100f64.powi(3) / 12.0).abs() < 1e-6);
         assert!((p.ixx - 100.0 * 8.0 / 12.0).abs() < 1e-9);
+    }
+
+    /// The solver recovers an exact fit, and a column that is the first one plus rounding noise
+    /// is dropped (coefficient 0). Before the rank check it was kept, and the fit split the
+    /// constant term between the two near-copies arbitrarily (1.874 and 1.126 here), which in
+    /// stress_to_action puts a spurious action into a column the stresses never asked for.
+    #[test]
+    fn least_squares_exact_and_near_dependent() {
+        let x: Vec<f64> = (0..12).map(|i| i as f64 / 11.0).collect();
+        let c0 = vec![1.0; 12];
+        let c1: Vec<f64> = x.clone();
+        let s: Vec<f64> = x.iter().map(|x| 3.0 - 2.0 * x).collect();
+        let f = least_squares(&[c0.clone(), c1.clone()], &s);
+        assert!(
+            (f[0] - 3.0).abs() < 1e-12 && (f[1] + 2.0).abs() < 1e-12,
+            "{f:?}"
+        );
+
+        let near: Vec<f64> = c0
+            .iter()
+            .enumerate()
+            .map(|(i, v)| v + 5e-16 * i as f64)
+            .collect();
+        let f = least_squares(&[c0, near, c1], &s);
+        assert_eq!(f[1], 0.0, "{f:?}");
+        assert!(
+            (f[0] - 3.0).abs() < 1e-12 && (f[2] + 2.0).abs() < 1e-12,
+            "{f:?}"
+        );
     }
 }
