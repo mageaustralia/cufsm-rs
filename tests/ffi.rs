@@ -699,6 +699,181 @@ fn bad_model_buffers_fail_cleanly() {
     assert!(n < 0 && last_error().contains("neigs"));
 }
 
+use cufsm::{
+    add_bimoment_stress, cutwp_prop2, grosprop, stresgen, yield_b, yield_mp, yield_mp_extfiber,
+    Actions,
+};
+
+fn section_call(
+    f: unsafe extern "C" fn(
+        *const f64,
+        usize,
+        *const f64,
+        usize,
+        *const f64,
+        usize,
+        *const f64,
+        usize,
+        *mut f64,
+        usize,
+    ) -> isize,
+    args: &[f64],
+    cap: usize,
+) -> (isize, Vec<f64>) {
+    let (mats, nodes, elems, _) = channel();
+    let mut out = vec![0.0; cap];
+    let n = unsafe {
+        f(
+            mats.as_ptr(),
+            mats.len(),
+            nodes.as_ptr(),
+            nodes.len(),
+            elems.as_ptr(),
+            elems.len(),
+            args.as_ptr(),
+            args.len(),
+            out.as_mut_ptr(),
+            out.len(),
+        )
+    };
+    (n, out)
+}
+
+#[test]
+fn props_match_the_rust_api() {
+    let _g = serial();
+    let (mats, nodes, elems, model) = channel();
+    let mut out = vec![0.0; 15];
+    let n = unsafe {
+        cufsm_props(
+            mats.as_ptr(),
+            mats.len(),
+            nodes.as_ptr(),
+            nodes.len(),
+            elems.as_ptr(),
+            elems.len(),
+            out.as_mut_ptr(),
+            out.len(),
+        )
+    };
+    assert_eq!(n, 15, "{}", last_error());
+    let g = grosprop(&model);
+    let c = cutwp_prop2(&model);
+    assert_eq!(
+        out,
+        vec![
+            g.a, g.xcg, g.zcg, g.ixx, g.izz, g.ixz, g.thetap, g.i11, g.i22, c.j, c.xs, c.zs, c.cw,
+            c.b1, c.b2
+        ]
+    );
+}
+
+#[test]
+fn stresgen_matches_the_rust_api_with_a_bimoment() {
+    let _g = serial();
+    let (_, _, _, mut model) = channel();
+    let acts = [1000.0, 2e5, -3e4, 0.0, 0.0, 5e6, 0.0]; // restrained = 0, so unsymmetric
+    let (n, out) = section_call(cufsm_stresgen, &acts, 6);
+    assert_eq!(n, 6, "{}", last_error());
+    let g = grosprop(&model);
+    stresgen(
+        &mut model,
+        &Actions {
+            p: 1000.0,
+            mxx: 2e5,
+            mzz: -3e4,
+            m11: 0.0,
+            m22: 0.0,
+        },
+        &g,
+        true,
+    );
+    let c = cutwp_prop2(&model);
+    add_bimoment_stress(&mut model, 5e6, c.cw, &c.wn);
+    let want: Vec<f64> = model.nodes.iter().map(|n| n.stress).collect();
+    assert_eq!(out, want);
+}
+
+#[test]
+fn uniform_p_gives_p_over_a() {
+    let _g = serial();
+    let (_, _, _, model) = channel();
+    let (_, out) = section_call(cufsm_stresgen, &[1000.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0], 6);
+    let a = grosprop(&model).a;
+    assert!(out
+        .iter()
+        .all(|s| (s - 1000.0 / a).abs() < 1e-12 * (1000.0 / a)));
+}
+
+#[test]
+fn yield_both_variants_and_by() {
+    let _g = serial();
+    let (_, _, _, model) = channel();
+    let g = grosprop(&model);
+    let c = cutwp_prop2(&model);
+    for (ext, restrained) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)] {
+        let (n, out) = section_call(cufsm_yield, &[345.0, restrained, ext], 6);
+        assert_eq!(n, 6, "{}", last_error());
+        let y = if ext == 1.0 {
+            yield_mp_extfiber(&model, 345.0, &g, restrained == 0.0)
+        } else {
+            yield_mp(&model, 345.0, &g, restrained == 0.0)
+        };
+        assert_eq!(
+            out,
+            vec![
+                y.py,
+                y.mxx,
+                y.mzz,
+                y.m11,
+                y.m22,
+                yield_b(345.0, c.cw, &c.wn)
+            ]
+        );
+    }
+    let (_, cl) = section_call(cufsm_yield, &[345.0, 0.0, 0.0], 6);
+    let (_, ex) = section_call(cufsm_yield, &[345.0, 0.0, 1.0], 6);
+    assert!(
+        ex[1] < cl[1],
+        "the face yields before the midline: Mxxy {} < {}",
+        ex[1],
+        cl[1]
+    );
+}
+
+#[test]
+fn stress_to_action_round_trips_stresgen() {
+    let _g = serial();
+    let (mats, mut nodes, elems, _) = channel();
+    let (_, s) = section_call(cufsm_stresgen, &[1000.0, 0.0, 0.0, 2e5, 0.0, 0.0, 0.0], 6);
+    for (i, v) in s.iter().enumerate() {
+        nodes[i * 7 + 6] = *v;
+    }
+    let mut out = vec![0.0; 5];
+    let n = unsafe {
+        cufsm_stress_to_action(
+            mats.as_ptr(),
+            mats.len(),
+            nodes.as_ptr(),
+            nodes.len(),
+            elems.as_ptr(),
+            elems.len(),
+            out.as_mut_ptr(),
+            out.len(),
+        )
+    };
+    assert_eq!(n, 5, "{}", last_error());
+    assert!(
+        (out[0] - 1000.0).abs() < 1e-6 && (out[1] - 2e5).abs() < 1e-3,
+        "{out:?}"
+    );
+    assert!(
+        out[4] < 1e-9 * 1000.0,
+        "exact stresses fit exactly, err {}",
+        out[4]
+    );
+}
+
 #[test]
 fn alloc_round_trips() {
     let _g = serial();

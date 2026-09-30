@@ -42,6 +42,15 @@
 //!   blocks of `(λ, G, D, L, O, 4 * nodes * nterms dofs)` (the dofs in CUFSM's order, per
 //!   term: `u`/`v` interleaved, then `w`/`θ` interleaved). Blocks past `found` are `NaN`, so a
 //!   length short of `neigs` positive eigenvalues reports how many it found in `found`.
+//! * `cufsm_props`: gross and warping section properties, no `args`. Output 15 values:
+//!   `A, xcg, zcg, Ixx, Izz, Ixz, thetap_deg, I11, I22, J, xs, zs, Cw, B1, B2`.
+//! * `cufsm_stresgen`: `args` is `[P, Mxx, Mzz, M11, M22, B, restrained]`, with `restrained` 0
+//!   or 1 (`unsymmetric = !restrained`). Writes one reference stress per node; the nodes' own
+//!   stress column in the input is ignored.
+//! * `cufsm_yield`: `args` is `[fy, restrained, extreme_fibre]`, both flags 0 or 1. Writes 6
+//!   values: `Py, Mxx, Mzz, M11, M22, By`.
+//! * `cufsm_stress_to_action`: no `args`; reads the nodes' stress column. Writes 5 values:
+//!   `P, M11, M22, B, err`.
 //!
 //! Both return the number of `f64` written, or a negative number on failure, when
 //! [`cufsm_last_error_ptr`]/[`cufsm_last_error_len`] hold the message in UTF-8 (valid until the
@@ -619,6 +628,240 @@ pub unsafe extern "C" fn cufsm_modes(
             }
         }
         Ok(buf.len())
+    })
+}
+
+/// Gross and warping section properties; see the module docs for the layout.
+///
+/// # Safety
+/// Every pointer must be valid for its length.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn cufsm_props(
+    mats: *const f64,
+    mats_len: usize,
+    nodes: *const f64,
+    nodes_len: usize,
+    elems: *const f64,
+    elems_len: usize,
+    out: *mut f64,
+    out_cap: usize,
+) -> isize {
+    guarded(|| {
+        // SAFETY: the export's own contract: every pointer valid for its length.
+        let m = unsafe {
+            read_model(
+                mats,
+                mats_len,
+                nodes,
+                nodes_len,
+                elems,
+                elems_len,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+            )
+        }?;
+        // SAFETY: the export's contract: `out` valid for `out_cap` values.
+        let buf = unsafe { output(out, out_cap, 15) }?;
+        let g = crate::grosprop(&m);
+        let c = crate::cutwp_prop2(&m);
+        buf.copy_from_slice(&[
+            g.a, g.xcg, g.zcg, g.ixx, g.izz, g.ixz, g.thetap, g.i11, g.i22, c.j, c.xs, c.zs, c.cw,
+            c.b1, c.b2,
+        ]);
+        Ok(15)
+    })
+}
+
+/// Reference stresses from member actions, CUFSM's loading panel; see the module docs.
+///
+/// # Safety
+/// Every pointer must be valid for its length.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn cufsm_stresgen(
+    mats: *const f64,
+    mats_len: usize,
+    nodes: *const f64,
+    nodes_len: usize,
+    elems: *const f64,
+    elems_len: usize,
+    actions: *const f64,
+    actions_len: usize,
+    out: *mut f64,
+    out_cap: usize,
+) -> isize {
+    guarded(|| {
+        // SAFETY: the export's own contract: every pointer valid for its length.
+        let mut m = unsafe {
+            read_model(
+                mats,
+                mats_len,
+                nodes,
+                nodes_len,
+                elems,
+                elems_len,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+            )
+        }?;
+        if actions_len != 7 {
+            return Err(format!(
+                "actions needs 7 values (P, Mxx, Mzz, M11, M22, B, restrained), got {actions_len}"
+            ));
+        }
+        // SAFETY: the export's contract: `actions` valid for 7 values (checked just above).
+        let a = unsafe { input(actions, 7, "actions") }?;
+        if !a[..6].iter().all(|v| v.is_finite()) {
+            return Err("an action is not finite".into());
+        }
+        let restrained = match a[6] {
+            0.0 => false,
+            1.0 => true,
+            v => return Err(format!("restrained must be 0 or 1, got {v}")),
+        };
+        let n = m.nodes.len();
+        // SAFETY: the export's contract: `out` valid for `out_cap` values.
+        let buf = unsafe { output(out, out_cap, n) }?;
+        let g = crate::grosprop(&m);
+        crate::stresgen(
+            &mut m,
+            &crate::Actions {
+                p: a[0],
+                mxx: a[1],
+                mzz: a[2],
+                m11: a[3],
+                m22: a[4],
+            },
+            &g,
+            !restrained,
+        );
+        if a[5] != 0.0 {
+            let c = crate::cutwp_prop2(&m);
+            crate::add_bimoment_stress(&mut m, a[5], c.cw, &c.wn);
+        }
+        for (o, nd) in buf.iter_mut().zip(&m.nodes) {
+            *o = nd.stress;
+        }
+        Ok(n)
+    })
+}
+
+/// First-yield actions; see the module docs.
+///
+/// # Safety
+/// Every pointer must be valid for its length.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn cufsm_yield(
+    mats: *const f64,
+    mats_len: usize,
+    nodes: *const f64,
+    nodes_len: usize,
+    elems: *const f64,
+    elems_len: usize,
+    args: *const f64,
+    args_len: usize,
+    out: *mut f64,
+    out_cap: usize,
+) -> isize {
+    guarded(|| {
+        // SAFETY: the export's own contract: every pointer valid for its length.
+        let m = unsafe {
+            read_model(
+                mats,
+                mats_len,
+                nodes,
+                nodes_len,
+                elems,
+                elems_len,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+            )
+        }?;
+        if args_len != 3 {
+            return Err(format!(
+                "yield args needs 3 values (fy, restrained, extreme_fibre), got {args_len}"
+            ));
+        }
+        // SAFETY: the export's contract: `args` valid for 3 values (checked just above).
+        let a = unsafe { input(args, 3, "yield args") }?;
+        if !(a[0].is_finite() && a[0] > 0.0) {
+            return Err("fy must be a positive finite number".into());
+        }
+        let bit = |v: f64, what: &str| match v {
+            0.0 => Ok(false),
+            1.0 => Ok(true),
+            _ => Err(format!("{what} must be 0 or 1, got {v}")),
+        };
+        let restrained = bit(a[1], "restrained")?;
+        let ext = bit(a[2], "extreme_fibre")?;
+        // SAFETY: the export's contract: `out` valid for `out_cap` values.
+        let buf = unsafe { output(out, out_cap, 6) }?;
+        let g = crate::grosprop(&m);
+        let y = if ext {
+            crate::yield_mp_extfiber(&m, a[0], &g, !restrained)
+        } else {
+            crate::yield_mp(&m, a[0], &g, !restrained)
+        };
+        let c = crate::cutwp_prop2(&m);
+        buf.copy_from_slice(&[
+            y.py,
+            y.mxx,
+            y.mzz,
+            y.m11,
+            y.m22,
+            crate::yield_b(a[0], c.cw, &c.wn),
+        ]);
+        Ok(6)
+    })
+}
+
+/// Generate from Stress: actions fitted to the nodes' stress column; see the module docs.
+///
+/// # Safety
+/// Every pointer must be valid for its length.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn cufsm_stress_to_action(
+    mats: *const f64,
+    mats_len: usize,
+    nodes: *const f64,
+    nodes_len: usize,
+    elems: *const f64,
+    elems_len: usize,
+    out: *mut f64,
+    out_cap: usize,
+) -> isize {
+    guarded(|| {
+        // SAFETY: the export's own contract: every pointer valid for its length.
+        let m = unsafe {
+            read_model(
+                mats,
+                mats_len,
+                nodes,
+                nodes_len,
+                elems,
+                elems_len,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+            )
+        }?;
+        // SAFETY: the export's contract: `out` valid for `out_cap` values.
+        let buf = unsafe { output(out, out_cap, 5) }?;
+        let g = crate::grosprop(&m);
+        let c = crate::cutwp_prop2(&m);
+        let s = crate::stress_to_action(&m, &g, c.cw, &c.wn);
+        buf.copy_from_slice(&[s.p, s.m11, s.m22, s.b, s.err]);
+        Ok(5)
     })
 }
 
