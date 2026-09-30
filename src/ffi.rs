@@ -37,9 +37,11 @@
 //!   `[modes found, unknowns, σN, σM, τT, τV]` (the reference stresses), then per mode
 //!   `[λ, circumferential waves]` and its `(u, v, w)` on an `nth × ny` grid (θ = 2πi/nth,
 //!   y = L j/(ny − 1), θ outer), scaled so the largest coefficient is 1.
-//! * `cufsm_modes` output: per length: `G, D, L, O` (the lowest mode's class percentages),
-//!   `nterms`, the `nterms` longitudinal terms, then the lowest mode's `4 * nodes * nterms`
-//!   entries in CUFSM's order (per term: `u`/`v` interleaved, then `w`/`θ` interleaved).
+//! * `cufsm_modes` output: per length, a row of `2 + nterms + neigs * (5 + 4 * nodes * nterms)`
+//!   values: `found, nterms`, the `nterms` longitudinal terms `m_1..m_nterms`, then `neigs`
+//!   blocks of `(λ, G, D, L, O, 4 * nodes * nterms dofs)` (the dofs in CUFSM's order, per
+//!   term: `u`/`v` interleaved, then `w`/`θ` interleaved). Blocks past `found` are `NaN`, so a
+//!   length short of `neigs` positive eigenvalues reports how many it found in `found`.
 //!
 //! Both return the number of `f64` written, or a negative number on failure, when
 //! [`cufsm_last_error_ptr`]/[`cufsm_last_error_len`] hold the message in UTF-8 (valid until the
@@ -536,11 +538,12 @@ pub unsafe extern "C" fn cufsm_signature(
     })
 }
 
-/// The lowest mode at each requested length, with its G/D/L/O classification percentages.
+/// `neigs` modes at each requested length, each with its load factor, its G/D/L/O classification
+/// percentages and its shape.
 ///
 /// # Safety
 /// Every pointer must be valid for its length; `out` needs, per length,
-/// `5 + nterms + 4 * nodes * nterms` values.
+/// `2 + nterms + neigs * (5 + 4 * nodes * nterms)` values.
 #[no_mangle]
 pub unsafe extern "C" fn cufsm_modes(
     params: *const f64,
@@ -586,7 +589,8 @@ pub unsafe extern "C" fn cufsm_modes(
         }?;
         let nn = i.model.nodes.len();
         let nt = i.m_all[0].len();
-        let per = 5 + nt + 4 * nn * nt;
+        let blk = 5 + 4 * nn * nt;
+        let per = 2 + nt + i.neigs * blk;
         // SAFETY: the export's contract: `out` valid for `out_cap` values.
         let buf = unsafe { output(out, out_cap, i.lengths.len() * per) }?;
         let results =
@@ -599,15 +603,19 @@ pub unsafe extern "C" fn cufsm_modes(
             cfsm::Norm::Vector,
         )
         .map_err(|e| e.to_string())?;
-        for ((row, r), modes) in buf.chunks_exact_mut(per).zip(&results).zip(&classes) {
-            let cls = modes.first().copied().unwrap_or([f64::NAN; 4]);
-            row[..4].copy_from_slice(&cls);
-            row[4] = nt as f64;
-            row[5..5 + nt].copy_from_slice(&r.m_terms);
-            // Lowest mode only: the GUI draws and classifies mode 1.
-            match r.modes.first() {
-                Some(mode) => row[5 + nt..].copy_from_slice(mode),
-                None => row[5 + nt..].fill(f64::NAN),
+        for ((row, r), cls) in buf.chunks_exact_mut(per).zip(&results).zip(&classes) {
+            let found = r.load_factors.len().min(i.neigs);
+            row[0] = found as f64;
+            row[1] = nt as f64;
+            row[2..2 + nt].copy_from_slice(&r.m_terms);
+            for (k, b) in row[2 + nt..].chunks_exact_mut(blk).enumerate() {
+                if k < found {
+                    b[0] = r.load_factors[k];
+                    b[1..5].copy_from_slice(&cls.get(k).copied().unwrap_or([f64::NAN; 4]));
+                    b[5..].copy_from_slice(&r.modes[k]);
+                } else {
+                    b.fill(f64::NAN);
+                }
             }
         }
         Ok(buf.len())

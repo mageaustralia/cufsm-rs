@@ -343,7 +343,15 @@ fn springs_and_constraints_reach_the_model() {
     assert!(last_error().contains("dof"), "{}", last_error());
 }
 
-/// Per length: the lowest mode's class, its terms and its shape, as the Rust API gives them.
+/// Mode block `k` of a length row that starts at `out[0]`: `λ, G, D, L, O, dofs...`.
+fn block(out: &[f64], nt: usize, nn: usize, k: usize) -> &[f64] {
+    let blk = 5 + 4 * nn * nt;
+    let start = 2 + nt + k * blk;
+    &out[start..start + blk]
+}
+
+/// Per length: `neigs` modes with their load factors, class shares and shapes, as the Rust API
+/// gives them.
 #[test]
 fn modes_match_the_rust_api() {
     let _g = serial();
@@ -359,24 +367,29 @@ fn modes_match_the_rust_api() {
         cufsm::cfsm::Norm::Vector,
     )
     .unwrap();
-    let per = 5 + 1 + 4 * 6;
+    let (nt, nn) = (1, 6);
+    let per = 2 + nt + 5 + 4 * nn * nt;
     let mut out = vec![f64::MAX; 2 * per + 3];
     assert_eq!(
         modes([1.0, 0.0, 1.0], "S-S", &lens, &mut out),
         (2 * per) as isize
     );
     for (i, row) in out[..2 * per].chunks_exact(per).enumerate() {
-        assert_eq!(&row[..4], &cls[i][0]);
-        assert_eq!((row[4], row[5]), (1.0, 1.0));
-        assert_eq!(&row[6..], &r[i].modes[0][..]);
+        assert_eq!((row[0], row[1], row[2]), (1.0, 1.0, 1.0));
+        let b = block(row, nt, nn, 0);
+        assert_eq!(b[0], r[i].load_factors[0]);
+        assert_eq!(&b[1..5], &cls[i][0]);
+        assert_eq!(&b[5..], &r[i].modes[0][..]);
     }
     assert!(out[2 * per..].iter().all(|v| *v == f64::MAX));
     // Local at 100 mm, global at 1000 mm.
+    let b0 = block(&out[..per], nt, nn, 0);
+    let b1 = block(&out[per..2 * per], nt, nn, 0);
     assert!(
-        out[2] > 50.0 && out[per] + out[per + 1] > 50.0,
+        b0[3] > 50.0 && b1[1] + b1[2] > 50.0,
         "{:?} {:?}",
-        &out[..4],
-        &out[per..per + 4]
+        &b0[1..5],
+        &b1[1..5]
     );
 }
 
@@ -399,7 +412,8 @@ fn modes_classify_an_angle_and_a_plate() {
         let elems: Vec<f64> = (0..pts.len() - 1)
             .flat_map(|i| [i as f64, (i + 1) as f64, 1.5, 0.0])
             .collect();
-        let per = 5 + 1 + 4 * pts.len();
+        let (nt, nn) = (1, pts.len());
+        let per = 2 + nt + 5 + 4 * nn * nt;
         let mut out = vec![0.0; 2 * per];
         let n = unsafe {
             cufsm_modes(
@@ -430,13 +444,114 @@ fn modes_classify_an_angle_and_a_plate() {
             if n < 0 { last_error() } else { String::new() }
         );
         for row in out.chunks_exact(per) {
-            assert!(
-                (row[..4].iter().sum::<f64>() - 100.0).abs() < 1e-6,
-                "{:?}",
-                &row[..4]
-            );
+            assert!(row[0] >= 1.0, "{pts:?}: found {}", row[0]);
+            let cls = &block(row, nt, nn, 0)[1..5];
+            assert!((cls.iter().sum::<f64>() - 100.0).abs() < 1e-6, "{cls:?}");
         }
     }
+}
+
+fn modes_v2(params: [f64; 3], lens: &[f64]) -> (isize, Vec<f64>) {
+    let (mats, nodes, elems, _) = channel();
+    let nn = nodes.len() / 7;
+    let nt = params[0] as usize;
+    let neigs = params[2] as usize;
+    let per = 2 + nt + neigs * (5 + 4 * nn * nt);
+    let mut out = vec![0.0; per * lens.len()];
+    let n = unsafe {
+        cufsm_modes(
+            params.as_ptr(),
+            3,
+            mats.as_ptr(),
+            mats.len(),
+            nodes.as_ptr(),
+            nodes.len(),
+            elems.as_ptr(),
+            elems.len(),
+            "S-S".as_ptr(),
+            3,
+            lens.as_ptr(),
+            lens.len(),
+            std::ptr::null(),
+            0,
+            std::ptr::null(),
+            0,
+            out.as_mut_ptr(),
+            out.len(),
+        )
+    };
+    (n, out)
+}
+
+#[test]
+fn modes_return_neigs_modes_in_order() {
+    let _g = serial();
+    let (_, _, _, model) = channel();
+    let (n, out) = modes_v2([1.0, 0.0, 5.0], &[120.0]);
+    assert!(n > 0, "{}", last_error());
+    let want = stripmain(&model, &[120.0], &[vec![1.0]], BoundaryCondition::SS, 5).unwrap();
+    let found = out[0] as usize;
+    assert_eq!(found, want[0].load_factors.len().min(5));
+    let nn = model.nodes.len();
+    let blk = 5 + 4 * nn;
+    for k in 0..found {
+        let b = &out[3 + k * blk..3 + (k + 1) * blk];
+        assert_eq!(b[0], want[0].load_factors[k]);
+        assert_eq!(&b[5..], &want[0].modes[k][..]);
+        let s: f64 = b[1..5].iter().sum();
+        assert!((s - 100.0).abs() < 1e-6, "class percentages sum to {s}");
+    }
+    for k in 1..found {
+        assert!(
+            out[3 + k * blk] >= out[3 + (k - 1) * blk],
+            "load factors ascend"
+        );
+    }
+}
+
+#[test]
+fn modes_short_of_neigs() {
+    let _g = serial();
+    // the channel has 6 nodes, 24 dofs: 50 positive eigenvalues cannot all exist
+    let (n, out) = modes_v2([1.0, 0.0, 50.0], &[120.0]);
+    assert!(n > 0, "{}", last_error());
+    let found = out[0] as usize;
+    assert!(found < 50);
+    let blk = 5 + 4 * 6;
+    assert!(
+        out[3 + found * blk].is_nan(),
+        "the first missing block is NaN"
+    );
+}
+
+#[test]
+fn modes_refuse_a_v1_sized_buffer() {
+    let _g = serial();
+    let (mats, nodes, elems, _) = channel();
+    let mut out = vec![0.0; 5 + 1 + 4 * 6]; // v1 stride for 1 term
+    let n = unsafe {
+        cufsm_modes(
+            [1.0, 0.0, 3.0].as_ptr(),
+            3,
+            mats.as_ptr(),
+            mats.len(),
+            nodes.as_ptr(),
+            nodes.len(),
+            elems.as_ptr(),
+            elems.len(),
+            "S-S".as_ptr(),
+            3,
+            [120.0].as_ptr(),
+            1,
+            std::ptr::null(),
+            0,
+            std::ptr::null(),
+            0,
+            out.as_mut_ptr(),
+            out.len(),
+        )
+    };
+    assert!(n < 0 && last_error().contains("too small"));
 }
 
 #[test]
