@@ -52,8 +52,12 @@ pub mod strip;
 pub mod template;
 
 pub use analysis::{signature_minima, signature_ss, stripmain, LengthResult, Minimum};
+pub use cutwp::{cutwp_prop2, CutwpProps};
 pub use model::{BoundaryCondition, Constraint, Dof, Element, Material, Model, Node, Spring};
-pub use section::{grosprop, stresgen, yield_mp, Actions, GrossProperties, YieldActions};
+pub use section::{
+    add_bimoment_stress, element_corners, grosprop, stresgen, stress_to_action, yield_b, yield_mp,
+    yield_mp_extfiber, Actions, GrossProperties, StressActions, YieldActions,
+};
 pub use template::{templatecalc, Shape, Template};
 
 /// Why an analysis could not run.

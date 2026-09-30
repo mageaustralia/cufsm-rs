@@ -252,3 +252,173 @@ fn load_factors_and_modes_match_cufsm() {
         "too few modes compared: {modes_compared}"
     );
 }
+
+use cufsm::{add_bimoment_stress, cutwp_prop2, stress_to_action, yield_b, yield_mp_extfiber};
+
+fn close(got: f64, want: f64, rel: f64) -> bool {
+    (got - want).abs() <= rel * want.abs().max(1.0)
+}
+
+#[test]
+fn extreme_fibre_yield_matches_current_cufsm() {
+    for r in cases() {
+        let name = r["name"].as_str().unwrap();
+        let m = model_of(&r);
+        let y = &r["yield_ext"];
+        let unsym = r["actions"]["unsymm"].as_f64().unwrap() != 0.0;
+        let got = yield_mp_extfiber(&m, y["fy"].as_f64().unwrap(), &grosprop(&m), unsym);
+        let cw = cutwp_prop2(&m);
+        let by = yield_b(y["fy"].as_f64().unwrap(), cw.cw, &cw.wn);
+        for (k, g) in [
+            ("Py", got.py),
+            ("Mxx", got.mxx),
+            ("Mzz", got.mzz),
+            ("M11", got.m11),
+            ("M22", got.m22),
+            ("B", by),
+        ] {
+            let w = y[k].as_f64().unwrap_or(f64::INFINITY);
+            if w.abs() > 1e15 {
+                assert!(
+                    g.abs() > 1e15 || g == 0.0,
+                    "{name}: {k} {g}, CUFSM never yields ({w})"
+                );
+                continue;
+            }
+            assert!(close(g, w, 1e-12), "{name}: {k} {g} vs CUFSM {w}");
+        }
+    }
+}
+
+#[test]
+fn bimoment_stress_matches_warp_stress() {
+    for r in cases() {
+        let name = r["name"].as_str().unwrap();
+        let mut m = model_of(&r);
+        let cw = cutwp_prop2(&m);
+        add_bimoment_stress(&mut m, r["warp"]["B"].as_f64().unwrap(), cw.cw, &cw.wn);
+        let want = vec_of(&r["warp"]["stress"]);
+        for (i, (n, w)) in m.nodes.iter().zip(&want).enumerate() {
+            assert!(
+                close(n.stress, *w, 1e-12),
+                "{name}: node {i} {} vs {w}",
+                n.stress
+            );
+        }
+    }
+}
+
+#[test]
+fn stress_to_action_matches_cufsm() {
+    for r in cases() {
+        let name = r["name"].as_str().unwrap();
+        let mut m = model_of(&r);
+        let cw = cutwp_prop2(&m);
+        add_bimoment_stress(&mut m, r["warp"]["B"].as_f64().unwrap(), cw.cw, &cw.wn);
+        let p = grosprop(&m);
+        let got = stress_to_action(&m, &p, cw.cw, &cw.wn);
+        let s = &r["s2a"];
+        // The G stress_to_action fits, rebuilt here so a case whose fitted actions cannot be
+        // compared directly can be compared through the stresses G f they produce.
+        let th = p.thetap * std::f64::consts::PI / 180.0;
+        let (c, ss) = (th.cos(), th.sin());
+        let g_col = |k: usize, i: usize| -> f64 {
+            let nd = &m.nodes[i];
+            let (dx, dz) = (nd.x - p.xcg, nd.z - p.zcg);
+            let (x1, z1) = (c * dx + ss * dz, -ss * dx + c * dz);
+            match k {
+                0 => 1.0 / p.a,
+                1 => z1 / p.i11,
+                2 => x1 / -p.i22,
+                _ => cw.wn.get(i).copied().unwrap_or(f64::NAN) / cw.cw,
+            }
+        };
+        let fits: [[f64; 4]; 2] = [[got.p, got.m11, got.m22, got.b], {
+            let f = s;
+            [
+                f["P"].as_f64().unwrap_or(f64::NAN),
+                f["M11"].as_f64().unwrap_or(f64::NAN),
+                f["M22"].as_f64().unwrap_or(f64::NAN),
+                f["B"].as_f64().unwrap_or(f64::NAN),
+            ]
+        }];
+        let biggest = fits[0]
+            .iter()
+            .chain(fits[1].iter())
+            .fold(0.0_f64, |m, v| m.max(v.abs()));
+        for (k, g) in [
+            ("P", got.p),
+            ("M11", got.m11),
+            ("M22", got.m22),
+            ("B", got.b),
+        ] {
+            let Some(w) = s[k].as_f64() else {
+                // The oracle pins nothing for this case: CUFSM's stress_to_action.m has no NaN
+                // trap, so when Cw = 0 its G(:,4) = w/Cw column is NaN and f = G\s comes back
+                // NaN for the whole fit, which jsonencode writes as null. We drop the column
+                // instead, so every action stays finite, and B is exactly 0 because the section
+                // cannot carry it (Cw = 0).
+                assert!(g.is_finite(), "{name}: {k} {g}");
+                if k == "B" {
+                    assert_eq!(g, 0.0, "{name}: B is 0 when Cw = 0");
+                }
+                continue;
+            };
+            if close(g, w, 1e-9) {
+                continue;
+            }
+            // The plan's fallback for a fit whose f cannot be compared directly. G's columns
+            // span orders of magnitude in norm (1/A down to w/Cw) while the bimoment is 1e6,
+            // so the solve's rounding noise puts about cond(G) * eps * |B| of error into the
+            // near-zero actions: on "lipped-c unequal compression" M11 comes out at -1.0e-11
+            // here and -1.1e-9 in MATLAB's pivoted QR, both far below any stress either can
+            // produce, while err stays at 1e-15 (ours) and 5e-14 (theirs). Both values must
+            // then sit at that floor (a real mistake in a dominant action still fails), and
+            // the fitted stresses G f are compared instead of f. The 1e-9 tolerance on f is
+            // unchanged for every other case.
+            assert!(
+                g.abs() <= 1e-5 * biggest && w.abs() <= 1e-5 * biggest,
+                "{name}: {k} {g} vs CUFSM {w} differ past the fit's noise floor {biggest}"
+            );
+            for i in 0..m.nodes.len() {
+                let ours: f64 = (0..4).map(|q| g_col(q, i) * fits[0][q]).sum();
+                let want: f64 = (0..4).map(|q| g_col(q, i) * fits[1][q]).sum();
+                assert!(
+                    close(ours, want, 1e-12),
+                    "{name}: {k} fitted stress at node {i}: {ours} vs {want}"
+                );
+            }
+        }
+        match s["err"].as_f64() {
+            // A null err is the same NaN fit: it pins nothing, ours must just be finite.
+            None => assert!(got.err.is_finite(), "{name}: err {}", got.err),
+            Some(w) => assert!(
+                got.err <= w * (1.0 + 1e-6) + 1e-9,
+                "{name}: err {}",
+                got.err
+            ),
+        }
+    }
+}
+
+#[test]
+fn plate_has_no_bimoment_yield_and_no_nan() {
+    let r = cases()
+        .into_iter()
+        .find(|r| r["name"] == "flat plate compression")
+        .unwrap();
+    let m = model_of(&r);
+    let cw = cutwp_prop2(&m);
+    let by = yield_b(345.0, cw.cw, &cw.wn);
+    assert_eq!(by, 0.0);
+    let s = stress_to_action(&m, &grosprop(&m), cw.cw, &cw.wn);
+    assert!(s.p.is_finite() && s.m11.is_finite() && s.m22.is_finite() && s.b.is_finite());
+    // The plate carries P = 1000 as a uniform P/A = 5 stress (its nodes are all at 5), so the
+    // fit must report that carried axial action back: dropping the Cw = 0 column must zero B,
+    // not P.
+    assert!(
+        (s.p - 1000.0).abs() <= 1e-6 * 1000.0,
+        "p {} for the plate's carried axial action",
+        s.p
+    );
+}
