@@ -24,10 +24,11 @@
 //!   dof codes 1 = x, 2 = z, 3 = y along the member, 4 = theta, and the row reading
 //!   `u_e = coeff * u_k`
 //! * `bc`: UTF-8 bytes of CUFSM's boundary condition string, `S-S`, `C-C`, `S-C`, `C-F`, `C-G`
-//! * `lengths`: for `S-S`, half-wavelengths, with `terms` = 1 (the signature curve takes the
-//!   single term m = 1; more terms at a half-wavelength would give the curve's minimum over
-//!   L, L/2, … instead, so it is refused). For the other boundary conditions, physical member
-//!   lengths, with the longitudinal terms `1..=terms` (1 to [`MAX_TERMS`]).
+//! * `lengths`: with the longitudinal terms `1..=terms` (1 to [`MAX_TERMS`]) at each. For `S-S` with
+//!   `terms` = 1 they are half-wavelengths: the signature curve. Otherwise they are physical member
+//!   lengths, CUFSM's general boundary condition solution; with `S-S` the terms are uncoupled, so a
+//!   length reports its lowest mode over 1 to `terms` half-waves (the signature curve's minimum over
+//!   L, L/2, ...).
 //! * `spaces`: the constrained curves wanted, bits 1 = G, 2 = D, 4 = L, 8 = O (0 to 15).
 //! * `cufsm_signature` output: one row of `2 + popcount(spaces)` values per length, in input
 //!   order: `L, λ`, then one column per requested space in G, D, L, O order. A length with no
@@ -77,7 +78,7 @@ const N_NODE: usize = 7;
 const N_ELEM: usize = 4;
 const N_SPRING: usize = 9;
 const N_CONSTRAINT: usize = 5;
-/// The most longitudinal terms accepted for a boundary condition other than S-S.
+/// The most longitudinal terms accepted.
 pub const MAX_TERMS: usize = 100;
 /// The most eigenvalues kept per length.
 pub const MAX_NEIGS: usize = 50;
@@ -345,16 +346,11 @@ unsafe fn read_input(
         .map_err(|_| "boundary condition is not UTF-8".to_string())?;
     let bc =
         BoundaryCondition::parse(s).ok_or_else(|| format!("unknown boundary condition {s:?}"))?;
-    let terms = if bc == BoundaryCondition::SS {
-        if terms != 1.0 {
-            return Err(format!(
-                "S-S is the signature curve, which takes the single term m = 1 at each half-wavelength; terms must be 1, got {terms}"
-            ));
-        }
-        1
-    } else {
-        whole(terms, 1, MAX_TERMS, "terms")?
-    };
+    // Any end condition takes 1 to MAX_TERMS longitudinal terms. With S-S and one term the lengths
+    // are half-wavelengths (the signature curve); with S-S and m = 1..n they are member lengths and
+    // the terms are uncoupled, so each length reports its lowest mode over 1 to n half-waves, as
+    // CUFSM's general boundary condition solution does.
+    let terms = whole(terms, 1, MAX_TERMS, "terms")?;
 
     // SAFETY: the export's contract: every pointer valid for its length.
     let model = unsafe {

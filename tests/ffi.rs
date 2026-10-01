@@ -174,8 +174,6 @@ fn signature_ignores_neigs() {
 fn terms_are_checked() {
     let _g = serial();
     let mut out = vec![0.0; 64];
-    assert!(signature([6.0, 0.0, 1.0], "S-S", &LENS, &mut out) < 0);
-    assert!(last_error().contains("terms must be 1"), "{}", last_error());
     assert!(signature([0.0, 0.0, 1.0], "C-C", &LENS, &mut out) < 0);
     assert!(signature([2.5, 0.0, 1.0], "C-C", &LENS, &mut out) < 0);
     // C-C at physical lengths with three terms: the Rust API's answer.
@@ -185,6 +183,33 @@ fn terms_are_checked() {
     assert_eq!(signature([3.0, 0.0, 1.0], "C-C", &LENS, &mut out), 12);
     for i in 0..LENS.len() {
         assert_eq!(out[2 * i + 1], r[i].load_factors[0]);
+    }
+}
+
+/// S-S over member lengths with m = 1..3 (CUFSM's general boundary condition with S-S ends): the
+/// terms are uncoupled, so the lowest mode at L is the lowest of the one-term signature at L, L/2
+/// and L/3.
+#[test]
+fn ss_with_several_terms_is_the_lowest_over_half_waves() {
+    let _g = serial();
+    let lens = [300.0, 900.0, 2400.0];
+    let mut many = vec![0.0; 6];
+    assert_eq!(
+        signature([3.0, 0.0, 1.0], "S-S", &lens, &mut many),
+        6,
+        "{}",
+        last_error()
+    );
+    for (i, l) in lens.iter().enumerate() {
+        let parts: Vec<f64> = [*l, l / 2.0, l / 3.0].into();
+        let mut one = vec![0.0; 6];
+        assert_eq!(signature([1.0, 0.0, 1.0], "S-S", &parts, &mut one), 6);
+        let want = one[1].min(one[3]).min(one[5]);
+        assert!(
+            (many[2 * i + 1] - want).abs() <= 1e-9 * want,
+            "L {l}: {} vs {want}",
+            many[2 * i + 1]
+        );
     }
 }
 
