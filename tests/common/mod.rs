@@ -184,3 +184,26 @@ pub fn cond_estimate(m: &Model, a: f64, bc: BoundaryCondition, m_a: &[f64]) -> f
 pub fn load_factor_tolerance(cond: f64, lf: f64, lf1: f64) -> f64 {
     (1e-10 + 1e-12 * cond) * (lf / lf1).max(1.0)
 }
+
+/// The condition estimate of the problem restricted to cFSM `spaces`, `Rᵀ K R` at one term, as
+/// [`cond_estimate`] for the full problem.
+pub fn restricted_cond(
+    m: &Model,
+    a: f64,
+    bc: BoundaryCondition,
+    spaces: cufsm::cfsm::Spaces,
+) -> f64 {
+    use cufsm::cfsm::{base_column, mode_select};
+    use cufsm::linalg::RMat;
+    let (bv, ngm, ndm, nlm) = base_column(m, a, bc, &[1.0]).unwrap();
+    let r = mode_select(&bv, ngm, ndm, nlm, spaces, 4 * m.nodes.len(), 1);
+    if r.c == 0 {
+        return 1.0;
+    }
+    let (k, _) = cufsm::analysis::assemble(m, a, bc, &[1.0]);
+    let kff = r.t().mul(&RMat::from_square(&k)).mul(&r).to_square();
+    let l = cufsm::dense::cholesky(&kff.symmetrised()).unwrap();
+    let piv: Vec<f64> = (0..l.n).map(|j| l.get(j, j)).collect();
+    (piv.iter().cloned().fold(0.0, f64::max) / piv.iter().cloned().fold(f64::INFINITY, f64::min))
+        .powi(2)
+}

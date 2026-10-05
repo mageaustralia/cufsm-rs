@@ -153,22 +153,6 @@ fn modal_spaces_match_cufsm() {
     }
 }
 
-/// The condition estimate of the restricted problem's `Rᵀ K R`, as `cond_estimate` for the full.
-fn restricted_cond(m: &cufsm::Model, a: f64, bc: cufsm::BoundaryCondition, spaces: Spaces) -> f64 {
-    use cufsm::cfsm::mode_select;
-    let (bv, ngm, ndm, nlm) = base_column(m, a, bc, &[1.0]).unwrap();
-    let r = mode_select(&bv, ngm, ndm, nlm, spaces, 4 * m.nodes.len(), 1);
-    if r.c == 0 {
-        return 1.0;
-    }
-    let (k, _) = cufsm::analysis::assemble(m, a, bc, &[1.0]);
-    let kff = r.t().mul(&RMat::from_square(&k)).mul(&r).to_square();
-    let l = cufsm::dense::cholesky(&kff.symmetrised()).unwrap();
-    let piv: Vec<f64> = (0..l.n).map(|j| l.get(j, j)).collect();
-    (piv.iter().cloned().fold(0.0, f64::max) / piv.iter().cloned().fold(f64::INFINITY, f64::min))
-        .powi(2)
-}
-
 #[test]
 fn restricted_load_factors_match_cufsm() {
     let mut compared = 0;
