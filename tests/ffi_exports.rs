@@ -950,6 +950,64 @@ fn bad_inputs_fail_cleanly() {
     assert_eq!(minima(&[1.0, 2.0, 3.0, f64::INFINITY], 4).0, -1);
 }
 
+/// A node no strip touches is refused with a message naming it, by the free and the cFSM
+/// analyses, the classification and the section properties alike: -1, not a trap. The cFSM
+/// paths used to index out of bounds on it, which in wasm aborts the module.
+#[test]
+fn a_node_in_no_element_is_refused() {
+    let _g = serial();
+    let good = channel();
+    let mut m = good.clone();
+    m.nodes.push(Node::new(25.0, 50.0, 1.0));
+    let b = bufs(&m);
+    let why = "node 6 belongs to no element";
+    let check = |what: &str, n: isize, out: &[f64]| {
+        assert_eq!(n, -1, "{what}");
+        let err = last_error();
+        assert!(err.contains(why) && !err.contains("panic"), "{what}: {err}");
+        assert!(
+            out.iter().all(|v| *v == f64::MAX),
+            "{what}: wrote on failure"
+        );
+    };
+    // cufsm_strip: free, free and classified, and restricted to G+D+L and to G alone.
+    for params in [
+        [1.0, 0.0, 2.0, 0.0],
+        [1.0, 0.0, 2.0, 1.0],
+        [2.0, 7.0, 2.0, 1.0],
+        [1.0, 1.0, 1.0, 0.0],
+    ] {
+        let (n, out) = strip_raw(&b, params, "S-S", &[100.0, 1000.0], &[], 4096);
+        check(&format!("strip {params:?}"), n, &out);
+    }
+    // cufsm_classify, given modes of the same model with the node in place (zeros there).
+    let mut res = stripmain(&good, &[100.0], &[vec![1.0]], BoundaryCondition::SS, 2).unwrap();
+    for md in &mut res[0].modes {
+        md.splice(12..12, [0.0, 0.0]);
+        md.extend([0.0, 0.0]);
+    }
+    let (n, out) = classify(&m, BoundaryCondition::SS, &res, [2.0, 1.0, 1.0]);
+    check("classify", n, &out[n.max(0) as usize..]);
+    // Section properties and the signature lengths read the same model.
+    let mut out = vec![f64::MAX; 64];
+    let n = unsafe {
+        cufsm_props_wn(
+            b.mats.as_ptr(),
+            b.mats.len(),
+            b.nodes.as_ptr(),
+            b.nodes.len(),
+            b.elems.as_ptr(),
+            b.elems.len(),
+            out.as_mut_ptr(),
+            out.len(),
+        )
+    };
+    check("props_wn", n, &out);
+    let (n, _) = signature_lengths(&m);
+    assert_eq!(n, -1);
+    assert!(last_error().contains(why), "{}", last_error());
+}
+
 #[test]
 fn abi_is_2_minor_1() {
     assert_eq!(cufsm_abi_version(), 2);

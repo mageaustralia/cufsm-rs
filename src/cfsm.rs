@@ -74,6 +74,10 @@ pub struct BaseProperties {
 }
 
 /// CUFSM `meta_elems.m`, `node_class.m`, `mode_nr.m` and `DOF_ordering.m`.
+///
+/// # Panics
+/// If the model does not pass [`Model::validate`] (a node that belongs to no element, say).
+/// [`base_column`] and everything built on it validate first and return the error instead.
 pub fn base_properties(model: &Model) -> BaseProperties {
     let nnode = model.nodes.len();
     let nelem = model.elements.len();
@@ -793,6 +797,7 @@ pub fn base_column(
     bc: BoundaryCondition,
     m_a: &[f64],
 ) -> Result<(RMat, usize, usize, usize), Error> {
+    model.validate()?;
     let mut unit = model.clone();
     for n in &mut unit.nodes {
         n.stress = 1.0;

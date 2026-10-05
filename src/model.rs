@@ -115,7 +115,8 @@ pub struct Model {
 }
 
 impl Model {
-    /// Checks every index and every size, so the analysis never has to.
+    /// Checks every index and every size, and that every node belongs to an element, so the
+    /// analysis never has to.
     pub fn validate(&self) -> Result<(), crate::Error> {
         use crate::Error::InvalidModel as Bad;
         if self.nodes.is_empty() {
@@ -148,6 +149,17 @@ impl Model {
             if (b.x - a.x).hypot(b.z - a.z) <= 0.0 {
                 return Err(Bad(format!("element {i} has zero width")));
             }
+        }
+        // A node no strip touches has no stiffness: the free analysis cannot solve, and cFSM's
+        // meta-element step, which counts a node's strips, would take it for a sub-node between
+        // two strips. CUFSM has no rule for one either.
+        let mut used = vec![false; n];
+        for e in &self.elements {
+            used[e.ni] = true;
+            used[e.nj] = true;
+        }
+        if let Some(i) = used.iter().position(|&u| !u) {
+            return Err(Bad(format!("node {i} belongs to no element")));
         }
         for (i, sp) in self.springs.iter().enumerate() {
             if sp.ni >= n || sp.nj.is_some_and(|j| j >= n) {
