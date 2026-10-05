@@ -469,12 +469,19 @@ pub(crate) fn parallel_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + 
 /// widest's. Returns the lowest load factor at each.
 pub fn signature_ss(model: &Model, neigs: usize) -> Result<Vec<LengthResult>, Error> {
     model.validate()?;
+    let lengths = signature_ss_lengths(model);
+    let m_all = vec![vec![1.0]; lengths.len()];
+    stripmain(model, &lengths, &m_all, BoundaryCondition::SS, neigs)
+}
+
+/// The half-wavelengths [`signature_ss`] analyses, CUFSM `signature_ss.m`: 100 spaced
+/// logarithmically from the narrowest strip's width to 1000 times the widest's. The model is not
+/// validated here; [`signature_ss`] does that first.
+pub fn signature_ss_lengths(model: &Model) -> Vec<f64> {
     let widths: Vec<f64> = elemprop(model).into_iter().map(|(w, _)| w).collect();
     let mm = widths.iter().copied().fold(f64::INFINITY, f64::min);
     let mw = widths.iter().copied().fold(0.0, f64::max);
-    let lengths = logspace(mm.log10(), (1000.0 * mw).log10(), 100);
-    let m_all = vec![vec![1.0]; lengths.len()];
-    stripmain(model, &lengths, &m_all, BoundaryCondition::SS, neigs)
+    logspace(mm.log10(), (1000.0 * mw).log10(), 100)
 }
 
 /// MATLAB `logspace(a, b, n)`.

@@ -51,7 +51,9 @@ pub mod section;
 pub mod strip;
 pub mod template;
 
-pub use analysis::{signature_minima, signature_ss, stripmain, LengthResult, Minimum};
+pub use analysis::{
+    signature_minima, signature_ss, signature_ss_lengths, stripmain, LengthResult, Minimum,
+};
 pub use cutwp::{cutwp_prop2, CutwpProps};
 pub use model::{BoundaryCondition, Constraint, Dof, Element, Material, Model, Node, Spring};
 pub use section::{

@@ -82,6 +82,9 @@ The module's functions:
 
 - `cufsm_abi_version` returns the buffer layout version, currently 2. A page should refuse a
   module whose version is not the one it was built for.
+- `cufsm_abi_minor` returns which functions have been added within that version, currently 1.
+  The earlier layouts do not change, so a page built for version 2 keeps working; a page that
+  needs the newer functions checks for a minor of at least 1.
 - `cufsm_signature` returns the buckling load factor at each length. It can also return the
   load factors restricted to the G, D, L and O spaces.
 - `cufsm_modes` returns up to `neigs` modes at each length, each with its load factor and its
@@ -93,11 +96,24 @@ The module's functions:
 - `cufsm_stress_to_action` fits member actions to a set of nodal stresses.
 - `cufsm_ftm` runs the finite tube method on one tube.
 
+Added in minor 1, so that a script written for the Python package can run on the same engine:
+
+- `cufsm_strip` returns modes as `cufsm_modes` does, with a different set of longitudinal terms
+  at each length if wanted, optionally restricted to cFSM spaces, with or without the
+  classification.
+- `cufsm_classify` classifies given modes into G, D, L and O, with each of CUFSM's
+  orthogonalisation, normalisation and O-space options.
+- `cufsm_template` meshes CUFSM's C or Z section template.
+- `cufsm_props_wn` returns the section properties and the warping function at each node.
+- `cufsm_signature_lengths` returns the 100 half-wavelengths of CUFSM's `signature_ss`, and
+  `cufsm_signature_minima` the local minima of a signature curve.
+
 Inputs and outputs are arrays of numbers in the module's memory: materials (5 values each),
 nodes (7 each: x, z, the four free flags, stress), elements (4 each: the two nodes, thickness,
-material). `src/ffi.rs` describes the layouts in full. For S-S, the lengths are half-wavelengths
-and there must be one longitudinal term, because that is what defines the signature curve. For
-the other end conditions, the lengths are member lengths and any number of terms can be used.
+material). `src/ffi.rs` describes the layouts in full. For S-S with one longitudinal term, the
+lengths are half-wavelengths: the signature curve. Otherwise they are member lengths and any
+number of terms can be used. There is no fixed limit on the number of terms or modes: each output
+is sized from the caller's own numbers, and memory is the only limit.
 
 A crate that depends on cufsm-rs does not get these functions unless it turns the feature on.
 
@@ -116,6 +132,7 @@ The tests and the reference data are not included in the crates.io package.
 | Theory, for sections CUFSM cannot classify (`tests/cfsm_few_corners.rs`) | An unequal angle, an equal angle, a T, a cruciform and a flat plate. | Short members classify as local and long ones as global, at the Euler load. Restricted to G, each buckles at the Euler load times 1 / (1 − ν²), as sections CUFSM handles do. A corner translation moves a one-corner section rigidly. |
 | CUFSM's template generator | Every node of 14 template cases. | To 1e-12. |
 | CUFSM's cFSM code, run in Octave | Six sections: sharp and rounded lipped C, lipped Z, plain channel, hat, branched I-section, and a lipped C with a fixity, a constraint and springs. Compared: `cutwp_prop2` properties and warping function, the four modal spaces, load factors restricted to G, D or L, and the classification of every distinct mode under each basis and O-space option. | Properties to 1e-10, spaces to 1e-8, restricted load factors to rounding, classifications to 1e-6 percentage points. |
+| CUFSM's code in Octave, through the C interface (`tests/ffi_exports.rs`) | The 100 `signature_ss` half-wavelengths of 37 models; load factors with a different, non-contiguous set of terms at each length (S-S, C-C, C-F, with springs); load factors restricted to single cFSM spaces and to unions of them; the classification under every orthogonalisation, normalisation and O-space option; the template; the warping function. | Lengths to 3e-15, load factors to rounding (the parity tolerances above), classifications to 1e-6 percentage points (1e-5 with the energy norms), nodes to 1e-12. Each export also writes exactly what the Rust API returns. |
 
 ### How eigenvalues are solved
 

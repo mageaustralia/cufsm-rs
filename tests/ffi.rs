@@ -226,7 +226,7 @@ fn bad_inputs_fail_cleanly() {
         ([1.0, 0.0, 1.0], "X-X", &LENS, "unknown boundary"),
         ([1.0, 0.0, 1.0], "S-S", &[100.0, f64::NAN], "length"),
         ([1.0, 0.0, 1.0], "S-S", &[100.0, -1.0], "length"),
-        ([1.0, 0.0, 99.0], "S-S", &LENS, "neigs"),
+        ([1.0, 0.0, 2.5], "S-S", &LENS, "neigs"),
     ];
     for (params, bc, lens, why) in cases {
         assert_eq!(signature(params, bc, lens, &mut out), -1, "{why}");
@@ -714,7 +714,7 @@ fn bad_model_buffers_fail_cleanly() {
     let mut out = vec![0.0; 2];
     let n = unsafe {
         cufsm_signature(
-            [1.0, 0.0, 99.0].as_ptr(),
+            [1.0, 0.0, -1.0].as_ptr(),
             3,
             mats.as_ptr(),
             mats.len(),
